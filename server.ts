@@ -179,8 +179,12 @@ async function startServer() {
     }
   });
 
-  // Mount Vite middleware in dev, or serve static dist/ in production
-  if (process.env.NODE_ENV !== 'production') {
+  app.get('/api/health', (_req, res) => {
+    return res.json({ ok: true });
+  });
+
+  // Mount Vite middleware only in explicit development mode; serve built dist/ in production
+  if (process.env.NODE_ENV === 'development') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },

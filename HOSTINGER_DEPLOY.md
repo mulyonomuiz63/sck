@@ -72,35 +72,37 @@ Hasil build statis ada di folder `dist/`.
 
 ---
 
-## Opsi B: Deploy di Hostinger VPS / Node.js Hosting (`server.ts` + `mysql2`)
+## Opsi B: Deploy di Hostinger Node.js Web Apps (hPanel Git Deploy) atau VPS
 
-Cocok untuk **Hostinger KVM VPS** (Ubuntu) atau layanan Node.js Hosting.
+Cocok untuk **Hostinger Node.js Hosting (hPanel -> Deploy from GitHub)** maupun **Hostinger KVM VPS**.
 
-### 1. Clone Repository & Install Dependency
+### Pengaturan Hostinger Node.js Web App (hPanel)
+1. Hubungkan repository GitHub (`main`).
+2. Pada bagian **Build and Output Settings**:
+   - **Node.js version**: `22`
+   - **Build command**: `npm run build` *(wajib diisi — otomatis membangun frontend `dist/` dan entry file `server.js`)*
+   - **Entry file**: `server.js`
+   - **Output directory**: biarkan kosong / default
+3. Pada bagian **Environment Variables**, isi:
+   ```env
+   NODE_ENV=production
+   MYSQL_HOST=127.0.0.1
+   MYSQL_PORT=3306
+   MYSQL_USER=u123456789_admin
+   MYSQL_PASSWORD=PASSWORD_MYSQL_ANDA
+   MYSQL_DATABASE=u123456789_coretax_sim
+   VITE_API_BASE_URL=/api
+   ```
+4. Klik **Deploy / Redeploy**. Setelah selesai, buka `https://domainanda.com/api/health` untuk memastikan respons `{"ok":true}`.
+
+### Jika Deploy Manual di Hostinger VPS (Ubuntu + PM2)
 ```bash
 git clone https://github.com/mulyonomuiz63/sck.git
 cd sck
 npm install
-```
-
-### 2. Buat File `.env` Produksi
-Salin `.env.example` menjadi `.env` dan isi kredensial MySQL Anda:
-```env
-NODE_ENV=production
-PORT=3000
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=3306
-MYSQL_USER=u123456789_admin
-MYSQL_PASSWORD=PASSWORD_MYSQL_ANDA
-MYSQL_DATABASE=u123456789_coretax_sim
-```
-> Catatan: Saat server Node.js pertama kali menerima request, `src/server/mysqlStore.ts` otomatis memastikan seluruh tabel dari `database/schema.sql` sudah tersedia.
-
-### 3. Build & Jalankan dengan PM2
-```bash
 npm run build
 npm install -g pm2
-pm2 start "npx tsx server.ts" --name kelasbrevet-coretax
+pm2 start server.js --name kelasbrevet-coretax
 pm2 save
 pm2 startup
 ```

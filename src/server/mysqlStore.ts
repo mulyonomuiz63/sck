@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import mysql, { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise';
 import { createSeedSnapshot } from '../lib/seedData.ts';
 import {
@@ -11,6 +12,9 @@ import {
   TaxReturn,
   TaxWorkspace,
 } from '../types/tax.ts';
+
+const __storeFilename = fileURLToPath(import.meta.url);
+const __storeDirname = path.dirname(__storeFilename);
 
 let pool: Pool | null = null;
 let schemaInitialized = false;
@@ -42,8 +46,13 @@ function getPool(): Pool {
 
 async function ensureSchema(): Promise<void> {
   if (!isMysqlConfigured() || schemaInitialized) return;
-  const schemaPath = path.resolve(process.cwd(), 'database', 'schema.sql');
-  if (fs.existsSync(schemaPath)) {
+  const candidates = [
+    path.resolve(process.cwd(), 'database', 'schema.sql'),
+    path.resolve(__storeDirname, 'database', 'schema.sql'),
+    path.resolve(__storeDirname, '..', '..', 'database', 'schema.sql'),
+  ];
+  const schemaPath = candidates.find((p) => fs.existsSync(p));
+  if (schemaPath) {
     const sql = fs.readFileSync(schemaPath, 'utf8');
     await getPool().query(sql);
   }
