@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { mysqlApi } from '../lib/apiClient';
+import { examApi, mysqlApi } from '../lib/apiClient';
 import {
   createDefaultSptBadanPayload,
   createDefaultSptOpPayload,
@@ -23,6 +23,7 @@ import {
   BillingCode,
   EBupotSlip,
   EFakturInvoice,
+  ExamCase,
   LedgerEntry,
   NavSection,
   PrintableDocument,
@@ -67,8 +68,16 @@ interface SimulatorContextValue {
   openPreviewDoc: (docData: PrintableDocument) => void;
   closePreviewDoc: () => void;
   // Auth & session
-  loginWithNik: (nik: string, customName?: string) => Promise<void>;
+  loginError: string | null;
+  clearLoginError: () => void;
+  loginWithNik: (nik: string, customName?: string) => Promise<boolean>;
+  loginWithSso: (token: string) => Promise<boolean>;
   logoutSimulator: () => void;
+  replaceSnapshot: (next: SimulatorSnapshot) => void;
+  activeExamCaseId: string | null;
+  activeExamCase: ExamCase | null;
+  setActiveExamCase: (examCase: ExamCase | null) => void;
+  setActiveExamCaseId: (caseId: string | null) => void;
   // Workspace actions
   switchRole: (role: TaxpayerRole) => void;
   toggleGuidedMode: () => void;
@@ -176,16 +185,26 @@ function computeReturnPosition(returnType: TaxReturnType, payload: AnySptPayload
 
 export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [snapshot, setSnapshot] = useState<SimulatorSnapshot | null>(null);
-  const [activeNav, setActiveNav] = useState<NavSection>('dashboard');
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [activeNav, setActiveNavState] = useState<NavSection>('ujian');
+  const [activeExamCase, setActiveExamCaseState] = useState<ExamCase | null>(null);
+  const [activeExamCaseId, setActiveExamCaseId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [tteRequest, setTteRequest] = useState<TteRequest | null>(null);
   const [previewDoc, setPreviewDoc] = useState<PrintableDocument | null>(null);
   const snapshotRef = useRef<SimulatorSnapshot | null>(null);
+  const activeExamRef = useRef<ExamCase | null>(null);
   const sptSaveTimersRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    activeExamRef.current = activeExamCase;
+  }, [activeExamCase]);
+
+  const clearLoginError = useCallback(() => setLoginError(null), []);
 
   const pushToast = useCallback((tone: ToastMessage['tone'], text: string) => {
     const id = generateId('toast');
@@ -195,33 +214,90 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, 4500);
   }, []);
 
+  const setActiveExamCase = useCallback((examCase: ExamCase | null) => {
+    activeExamRef.current = examCase;
+    setActiveExamCaseState(examCase);
+    setActiveExamCaseId(examCase ? examCase.id : null);
+  }, []);
+
+  const setActiveNav = useCallback(
+    (nav: NavSection) => {
+      if (nav !== 'ujian' && !activeExamRef.current) {
+        setActiveNavState('ujian');
+        pushToast('warning', 'Pilih soal ujian praktik lalu klik "Mulai Ujian Praktik" untuk membuka menu simulasi.');
+        return;
+      }
+      setActiveNavState(nav);
+    },
+    [pushToast]
+  );
+
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Hydrate active NIK session from MySQL backend (with instant local cache fallback)
+  // Hydrate any IN_PROGRESS exam case automatically when participant logs in or reloads
+  const hydrateActiveExamForNik = useCallback(
+    async (nik: string) => {
+      const res = await examApi.getParticipantExams(nik);
+      if (res.ok && res.data) {
+        const inProg = res.data.attempts.find((a) => a.status === 'IN_PROGRESS');
+        if (inProg) {
+          const matched = res.data.cases.find((c) => c.id === inProg.caseId) || null;
+          setActiveExamCase(matched);
+          return;
+        }
+      }
+      setActiveExamCase(null);
+      setActiveNavState('ujian');
+    },
+    [setActiveExamCase]
+  );
+
+  // Hydrate active NIK session from MySQL backend (verifying whitelist access)
   useEffect(() => {
     let cancelled = false;
     const lastNik = localStorage.getItem(ACTIVE_NIK_KEY);
     if (!lastNik || !/^\d{16}$/.test(lastNik)) return;
 
     const cached = loadLocalCache(lastNik);
-    if (cached) {
-      setSnapshot(cached);
-    }
 
     (async () => {
-      const fromDb = (await mysqlApi.getWorkspace(lastNik)) || (await mysqlApi.loginNik(lastNik, cached?.workspace.opProfile.nama));
-      if (!cancelled && fromDb) {
-        saveLocalCache(lastNik, fromDb);
-        setSnapshot(fromDb);
+      const res = await mysqlApi.getWorkspaceDetailed(lastNik);
+      if (cancelled) return;
+      if (res.status === 403) {
+        localStorage.removeItem(ACTIVE_NIK_KEY);
+        setSnapshot(null);
+        setLoginError(res.error || 'Akses NIK tidak lagi aktif.');
+        return;
+      }
+      if (res.ok && res.data) {
+        saveLocalCache(lastNik, res.data);
+        setSnapshot(res.data);
+        void hydrateActiveExamForNik(lastNik);
+        return;
+      }
+      // If 404 on fresh server, attempt normal NIK auth
+      const loginRes = await mysqlApi.loginNikDetailed(lastNik, cached?.workspace.opProfile.nama);
+      if (cancelled) return;
+      if (loginRes.ok && loginRes.data) {
+        saveLocalCache(lastNik, loginRes.data);
+        setSnapshot(loginRes.data);
+        void hydrateActiveExamForNik(lastNik);
+      } else if (loginRes.status === 403) {
+        localStorage.removeItem(ACTIVE_NIK_KEY);
+        setSnapshot(null);
+        setLoginError(loginRes.error || 'Akses NIK tidak aktif.');
+      } else if (cached) {
+        setSnapshot(cached);
+        void hydrateActiveExamForNik(lastNik);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [hydrateActiveExamForNik]);
 
   // Clean up any pending debounced SPT timers on unmount
   useEffect(() => {
@@ -261,33 +337,77 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }, 350);
   }, []);
 
+  const replaceSnapshot = useCallback((next: SimulatorSnapshot) => {
+    saveLocalCache(next.workspace.nik, next);
+    setSnapshot(next);
+  }, []);
+
   const loginWithNik = useCallback(
-    async (nikRaw: string, customName?: string) => {
+    async (nikRaw: string, customName?: string): Promise<boolean> => {
       const nik = nikRaw.replace(/\D/g, '');
       if (nik.length !== 16) {
+        setLoginError('NIK harus terdiri dari tepat 16 digit angka.');
         pushToast('error', 'NIK harus terdiri dari tepat 16 digit angka.');
-        return;
+        return false;
       }
 
-      // Primary source of truth: MySQL backend API
-      const fromDb = await mysqlApi.loginNik(nik, customName);
-      const loaded = fromDb || loadLocalCache(nik) || createSeedSnapshot(nik, 'mysql_user', customName);
+      setLoginError(null);
+      const res = await mysqlApi.loginNikDetailed(nik, customName);
+      if (!res.ok) {
+        // Explicit server rejection (e.g. 403 NOT_ENROLLED / SUSPENDED / EXPIRED) must block entry
+        if (res.status === 403 || res.status === 400) {
+          const msg = res.error || 'NIK belum terdaftar sebagai peserta aktif kelasbrevet.com.';
+          setLoginError(msg);
+          pushToast('error', msg);
+          return false;
+        }
+        // Only fall back to local cache if backend server is completely unreachable (status 0)
+        const fallback = loadLocalCache(nik) || createSeedSnapshot(nik, 'mysql_user', customName);
+        saveLocalCache(nik, fallback);
+        setSnapshot(fallback);
+        setActiveNavState('ujian');
+        return true;
+      }
 
+      const loaded = res.data!;
       saveLocalCache(nik, loaded);
       setSnapshot(loaded);
-      setActiveNav('dashboard');
+      setActiveNavState('ujian');
+      void hydrateActiveExamForNik(nik);
       pushToast(
         'success',
-        `Selamat datang, ${loaded.workspace.opProfile.nama}. Akun OP & Impersonate Badan siap digunakan.`
+        `Selamat datang, ${loaded.workspace.opProfile.nama}. Pilih soal ujian praktik untuk membuka simulator.`
       );
+      return true;
     },
-    [pushToast]
+    [hydrateActiveExamForNik, pushToast]
+  );
+
+  const loginWithSso = useCallback(
+    async (token: string): Promise<boolean> => {
+      setLoginError(null);
+      const res = await mysqlApi.loginSsoDetailed(token);
+      if (!res.ok || !res.data) {
+        const msg = res.error || 'Tautan SSO kelasbrevet.com tidak valid atau kedaluwarsa.';
+        setLoginError(msg);
+        pushToast('error', msg);
+        return false;
+      }
+      saveLocalCache(res.data.workspace.nik, res.data);
+      setSnapshot(res.data);
+      setActiveNavState('ujian');
+      void hydrateActiveExamForNik(res.data.workspace.nik);
+      pushToast('success', `Selamat datang, ${res.data.workspace.opProfile.nama}. Pilih soal ujian praktik untuk memulai.`);
+      return true;
+    },
+    [hydrateActiveExamForNik, pushToast]
   );
 
   const logoutSimulator = useCallback(() => {
     localStorage.removeItem(ACTIVE_NIK_KEY);
     setSnapshot(null);
-    setActiveNav('dashboard');
+    setActiveExamCase(null);
+    setActiveNavState('ujian');
     pushToast('info', 'Anda telah keluar dari sesi simulasi NIK.');
   }, [pushToast]);
 
@@ -1175,8 +1295,16 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       previewDoc,
       openPreviewDoc,
       closePreviewDoc,
+      loginError,
+      clearLoginError,
       loginWithNik,
+      loginWithSso,
       logoutSimulator,
+      replaceSnapshot,
+      activeExamCaseId,
+      activeExamCase,
+      setActiveExamCase,
+      setActiveExamCaseId,
       switchRole,
       toggleGuidedMode,
       setActiveCaseId,
@@ -1206,6 +1334,7 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     [
       snapshot,
       activeNav,
+      setActiveNav,
       toasts,
       pushToast,
       dismissToast,
@@ -1216,8 +1345,15 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       previewDoc,
       openPreviewDoc,
       closePreviewDoc,
+      loginError,
+      clearLoginError,
       loginWithNik,
+      loginWithSso,
       logoutSimulator,
+      replaceSnapshot,
+      activeExamCaseId,
+      activeExamCase,
+      setActiveExamCase,
       switchRole,
       toggleGuidedMode,
       setActiveCaseId,

@@ -6,7 +6,8 @@ export type NavSection =
   | 'efaktur'
   | 'ebupot'
   | 'spt'
-  | 'pembayaran';
+  | 'pembayaran'
+  | 'ujian';
 
 export interface TaxpayerProfileOP {
   nik: string;
@@ -373,7 +374,7 @@ export interface LedgerEntry {
 }
 
 export interface PrintableDocument {
-  kind: 'BPE' | 'EFAKTUR' | 'EBUPOT' | 'SPT_INDUK';
+  kind: 'BPE' | 'EFAKTUR' | 'EBUPOT' | 'SPT_INDUK' | 'SERTIFIKAT';
   title: string;
   subtitle: string;
   docNumber: string;
@@ -382,6 +383,17 @@ export interface PrintableDocument {
   taxpayerNpwp: string;
   rows: { label: string; value: string; highlight?: boolean }[];
   footerNote?: string;
+  certificateMeta?: {
+    config: CertificateConfig;
+    score: number;
+    maxScore: number;
+    passingScore: number;
+    packageCode: string;
+    moduleLabel: string;
+    caseCode: string;
+    caseTitle: string;
+    issuedAt: string;
+  };
 }
 
 export interface GuidedStepDefinition {
@@ -409,4 +421,132 @@ export interface SimulatorSnapshot {
   taxReturns: TaxReturn[];
   billing: BillingCode[];
   ledger: LedgerEntry[];
+  enrollment?: EnrolledParticipant | null;
 }
+
+// ============================================================================
+// Enrollment (Whitelist NIK kelasbrevet.com), Exam Cases & Auto-Grading Types
+// ============================================================================
+
+export type ParticipantStatus = 'ACTIVE' | 'SUSPENDED' | 'EXPIRED';
+
+export interface EnrolledParticipant {
+  nik: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  packageCode: string; // e.g. BREVET_A, BREVET_B, BREVET_AB
+  orderId: string;
+  status: ParticipantStatus;
+  expiresAt: string; // YYYY-MM-DD or ''
+  source: string;
+  createdAt?: string;
+}
+
+export type ExamModuleType =
+  | 'PPN'
+  | 'PPH21_TAHUNAN'
+  | 'EBUPOT_21_23'
+  | 'PPH_OP_UMUM'
+  | 'PPH_BADAN';
+
+export type ExamRuleType =
+  | 'EFAKTUR_OUTPUT_APPROVED_MIN'
+  | 'EFAKTUR_INPUT_CREDITED_MIN'
+  | 'EFAKTUR_MATCH_AMOUNT'
+  | 'EBUPOT_ISSUED_MIN'
+  | 'EBUPOT_TOTAL_PPH_MATCH'
+  | 'SPT_REPORTED'
+  | 'SPT_POSITION_MATCH'
+  | 'SPT_AMOUNT_DUE_MATCH'
+  | 'SPT_OP_HARTA_UTANG_MIN'
+  | 'SPT_BADAN_FISCAL_CHECK'
+  | 'PAYMENT_SETTLED';
+
+export interface ExamRubricRule {
+  id: string;
+  type: ExamRuleType;
+  label: string;
+  weight: number;
+  // Optional parameters depending on rule type
+  returnType?: TaxReturnType;
+  slipType?: EBupotType | 'ANY';
+  efakturCategory?: EFakturCategory | 'ANY';
+  expectedPosition?: TaxPosition;
+  taxpayerRole?: TaxpayerRole;
+  masaPajak?: number;
+  tahunPajak?: number;
+  minCount?: number;
+  targetAmount?: number;
+  tolerance?: number;
+}
+
+export interface ExamCase {
+  id: string;
+  code: string;
+  title: string;
+  moduleType: ExamModuleType;
+  packageAccess: string; // 'ALL' or comma-separated e.g. 'BREVET_A,BREVET_AB'
+  passingScore: number;
+  maxAttempts: number;
+  isActive: boolean;
+  scenarioText: string;
+  rubric: ExamRubricRule[];
+  createdAt?: string;
+}
+
+export interface ExamRuleResult {
+  ruleId: string;
+  label: string;
+  weight: number;
+  earned: number;
+  passed: boolean;
+  actualSummary: string;
+  expectedSummary: string;
+}
+
+export type ExamAttemptStatus = 'IN_PROGRESS' | 'PASSED' | 'FAILED';
+
+export interface ExamAttempt {
+  id: string;
+  caseId: string;
+  caseCode?: string;
+  caseTitle?: string;
+  nik: string;
+  participantName: string;
+  packageCode: string;
+  attemptNumber: number;
+  status: ExamAttemptStatus;
+  score: number;
+  maxScore: number;
+  passingScore: number;
+  results: ExamRuleResult[];
+  certificateNumber?: string;
+  certificateIssuedAt?: string;
+  startedAt: string;
+  submittedAt: string;
+}
+
+export interface CertificateConfig {
+  autoIssueEnabled: boolean;
+  organizationName: string;
+  certificateTitle: string;
+  programSubtitle: string;
+  numberPrefix: string;
+  issueCity: string;
+  signer1Name: string;
+  signer1Title: string;
+  signer2Name: string;
+  signer2Title: string;
+  logoDataUrl: string;
+  signature1DataUrl: string;
+  signature2DataUrl: string;
+  footerNote: string;
+}
+
+export interface AppSettingsConfig {
+  whitelistEnforced: boolean;
+  webhookCallbackUrl: string;
+  certificate: CertificateConfig;
+}
+

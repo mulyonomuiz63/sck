@@ -276,7 +276,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
       depositBalance: 150_000_000,
     },
     activeRole: 'OP',
-    guidedMode: true,
+    guidedMode: false,
     activeCaseId: 'case_pph21_tuan_a',
   };
 

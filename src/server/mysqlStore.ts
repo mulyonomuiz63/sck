@@ -18,15 +18,17 @@ const __storeDirname = path.dirname(__storeFilename);
 
 let pool: Pool | null = null;
 let schemaInitialized = false;
+let mysqlFallbackToMemory = false;
 
-// Fallback in-memory store strictly for environments where MYSQL_HOST is not configured
+// Fallback in-memory store strictly for environments where MYSQL_HOST is not configured or unreachable in dev preview
 const memoryWorkspaces = new Map<string, SimulatorSnapshot>();
 
 export function isMysqlConfigured(): boolean {
+  if (mysqlFallbackToMemory) return false;
   return Boolean(process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE);
 }
 
-function getPool(): Pool {
+export function getPool(): Pool {
   if (!pool) {
     pool = mysql.createPool({
       host: process.env.MYSQL_HOST,
@@ -35,8 +37,9 @@ function getPool(): Pool {
       password: process.env.MYSQL_PASSWORD || '',
       database: process.env.MYSQL_DATABASE,
       waitForConnections: true,
-      connectionLimit: 10,
+      connectionLimit: 15,
       queueLimit: 0,
+      connectTimeout: 5000,
       multipleStatements: true,
       charset: 'utf8mb4',
     });
@@ -44,19 +47,59 @@ function getPool(): Pool {
   return pool;
 }
 
-async function ensureSchema(): Promise<void> {
+export async function ensureSchema(): Promise<void> {
   if (!isMysqlConfigured() || schemaInitialized) return;
-  const candidates = [
-    path.resolve(process.cwd(), 'database', 'schema.sql'),
-    path.resolve(__storeDirname, 'database', 'schema.sql'),
-    path.resolve(__storeDirname, '..', '..', 'database', 'schema.sql'),
-  ];
-  const schemaPath = candidates.find((p) => fs.existsSync(p));
-  if (schemaPath) {
-    const sql = fs.readFileSync(schemaPath, 'utf8');
-    await getPool().query(sql);
+  try {
+    const dbName = String(process.env.MYSQL_DATABASE || '').trim();
+    const host = String(process.env.MYSQL_HOST || '').trim();
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+
+    // Di lingkungan local development, otomatis buat database jika belum dibuat di phpMyAdmin/MySQL
+    if (process.env.NODE_ENV !== 'production' && isLocalHost && /^[a-zA-Z0-9_]+$/.test(dbName)) {
+      const bootstrapConn = await mysql.createConnection({
+        host,
+        port: Number(process.env.MYSQL_PORT || 3306),
+        user: process.env.MYSQL_USER,
+        password: process.env.MYSQL_PASSWORD || '',
+        connectTimeout: 5000,
+      });
+      try {
+        await bootstrapConn.query(
+          `CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+        );
+      } finally {
+        await bootstrapConn.end();
+      }
+    }
+
+    const candidates = [
+      path.resolve(process.cwd(), 'database', 'schema.sql'),
+      path.resolve(__storeDirname, 'database', 'schema.sql'),
+      path.resolve(__storeDirname, '..', '..', 'database', 'schema.sql'),
+    ];
+    const schemaPath = candidates.find((p) => fs.existsSync(p));
+    if (schemaPath) {
+      const sql = fs.readFileSync(schemaPath, 'utf8');
+      await getPool().query(sql);
+    }
+    schemaInitialized = true;
+    console.log(`[MySQL] Terhubung ke ${host}:${process.env.MYSQL_PORT || 3306}/${dbName} (tabel siap).`);
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'production') {
+      mysqlFallbackToMemory = true;
+      console.warn(
+        '[MySQL Dev Fallback] Database MySQL tidak dapat dijangkau di lingkungan preview ini, beralih ke in-memory store:',
+        err instanceof Error ? err.message : err
+      );
+      return;
+    }
+    throw err;
   }
-  schemaInitialized = true;
+}
+
+export async function initDatabaseOrFallback(): Promise<void> {
+  if (!isMysqlConfigured()) return;
+  await ensureSchema();
 }
 
 function parseJson<T>(raw: unknown): T {

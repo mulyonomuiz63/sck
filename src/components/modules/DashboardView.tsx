@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRight, Building2, FileText, User } from 'lucide-react';
+import { ArrowRight, Building2, ClipboardCheck, FileText, User } from 'lucide-react';
 import { useSimulator } from '../../context/SimulatorContext';
 import { GUIDED_CASES } from '../../lib/seedData';
 import { formatNpwp16, formatRupiah, MASA_NAMES } from '../../lib/taxCalculations';
@@ -9,7 +9,6 @@ export const DashboardView: React.FC = () => {
     snapshot,
     setActiveNav,
     switchRole,
-    setActiveCaseId,
     openPreviewDoc,
   } = useSimulator();
 
@@ -46,7 +45,7 @@ export const DashboardView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => switchRole(isBadan ? 'OP' : 'BADAN')}
@@ -54,6 +53,14 @@ export const DashboardView: React.FC = () => {
           >
             {isBadan ? <User className="w-3.5 h-3.5" /> : <Building2 className="w-3.5 h-3.5" />}
             <span>{isBadan ? 'Kembali ke Akun OP' : 'Impersonate WP Badan'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveNav('ujian')}
+            className="px-4 py-2 text-xs font-bold bg-[#F5C518] text-[#1A2B5F] rounded-md hover:bg-[#EAB308] inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            <ClipboardCheck className="w-3.5 h-3.5" />
+            <span>Ujian Praktik</span>
           </button>
           <button
             type="button"
@@ -104,52 +111,39 @@ export const DashboardView: React.FC = () => {
         </div>
       </section>
 
-      {/* 5 Curriculum Modules Launcher */}
+      {/* 5 Curriculum Modules Launcher — Clean & Concise */}
       <section>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-bold text-[#1A2B5F]">Lima Modul Simulasi KelasBrevet</h2>
-          <span className="text-xs text-slate-500">Klik modul untuk langsung membuka panduan & menu praktik</span>
+          <h2 className="text-sm font-bold text-[#1A2B5F]">Modul Simulasi Coretax</h2>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {GUIDED_CASES.map((gc) => {
-            const doneSteps = gc.steps.filter((st) => st.check(snapshot)).length;
-            const allDone = doneSteps === gc.steps.length;
+            const targetNav = gc.steps[0]?.targetNav || 'spt';
             return (
               <div
                 key={gc.id}
-                className="bg-white border border-slate-200 rounded-lg p-5 flex flex-col justify-between"
+                className="bg-white border border-slate-200 rounded-lg p-4 flex flex-col justify-between gap-3"
               >
                 <div>
-                  <div className="flex items-center justify-between text-xs text-slate-500">
-                    <span>
-                      {gc.moduleCode} · {gc.recommendedRole === 'BADAN' ? 'WP Badan' : 'WP OP'}
-                    </span>
-                    <span className={`font-num font-semibold ${allDone ? 'text-emerald-700' : 'text-[#1A2B5F]'}`}>
-                      {doneSteps}/{gc.steps.length} selesai
-                    </span>
+                  <div className="text-[11px] font-semibold text-slate-500">
+                    {gc.moduleCode} · {gc.recommendedRole === 'BADAN' ? 'WP Badan' : 'WP OP'}
                   </div>
-                  <h3 className="mt-2 text-sm font-bold text-slate-900 leading-snug">{gc.title}</h3>
-                  <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">{gc.summary}</p>
+                  <h3 className="mt-1 text-sm font-bold text-slate-900 leading-snug">{gc.title}</h3>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500">
-                    {allDone ? 'Status: Tuntas' : 'Status: Siap Dipraktikkan'}
-                  </span>
+                <div className="pt-2.5 border-t border-slate-100 flex items-center justify-end">
                   <button
                     type="button"
                     onClick={() => {
                       if (workspace.activeRole !== gc.recommendedRole) {
                         switchRole(gc.recommendedRole);
                       }
-                      setActiveCaseId(gc.id);
-                      const nextStep = gc.steps.find((st) => !st.check(snapshot)) || gc.steps[0];
-                      setActiveNav(nextStep.targetNav);
+                      setActiveNav(targetNav);
                     }}
                     className="inline-flex items-center gap-1 text-xs font-bold text-[#1A2B5F] hover:text-[#B45309] cursor-pointer"
                   >
-                    <span>Mulai Praktik</span>
+                    <span>Buka Modul</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </button>
                 </div>

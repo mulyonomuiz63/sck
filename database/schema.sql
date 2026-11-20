@@ -153,4 +153,74 @@ CREATE TABLE IF NOT EXISTS `ledger_entries` (
   CONSTRAINT `fk_ledger_workspace` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 7. Tabel Peserta Terdaftar / Whitelist NIK Pembeli Paket kelasbrevet.com
+CREATE TABLE IF NOT EXISTS `enrolled_participants` (
+  `nik` CHAR(16) NOT NULL,
+  `full_name` VARCHAR(150) NOT NULL,
+  `email` VARCHAR(150) NOT NULL DEFAULT '',
+  `phone` VARCHAR(40) NOT NULL DEFAULT '',
+  `package_code` VARCHAR(40) NOT NULL DEFAULT 'BREVET_AB',
+  `order_id` VARCHAR(80) NOT NULL DEFAULT '',
+  `status` ENUM('ACTIVE', 'SUSPENDED', 'EXPIRED') NOT NULL DEFAULT 'ACTIVE',
+  `expires_at` VARCHAR(40) NOT NULL DEFAULT '',
+  `source` VARCHAR(40) NOT NULL DEFAULT 'ADMIN',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`nik`),
+  KEY `idx_enrolled_status_pkg` (`status`, `package_code`),
+  KEY `idx_enrolled_order` (`order_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 8. Tabel Bank Soal / Kasus Ujian Praktik & Rubrik Kunci Jawaban Otomatis
+CREATE TABLE IF NOT EXISTS `exam_cases` (
+  `id` VARCHAR(64) NOT NULL,
+  `code` VARCHAR(32) NOT NULL,
+  `title` VARCHAR(180) NOT NULL,
+  `module_type` ENUM('PPN', 'PPH21_TAHUNAN', 'EBUPOT_21_23', 'PPH_OP_UMUM', 'PPH_BADAN') NOT NULL,
+  `package_access` VARCHAR(120) NOT NULL DEFAULT 'ALL',
+  `passing_score` INT NOT NULL DEFAULT 75,
+  `max_attempts` INT NOT NULL DEFAULT 3,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `scenario_text` TEXT NOT NULL,
+  `rubric_json` JSON NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_exam_cases_code` (`code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 9. Tabel Riwayat Pengerjaan & Hasil Penilaian Otomatis Ujian Peserta
+CREATE TABLE IF NOT EXISTS `exam_attempts` (
+  `id` VARCHAR(64) NOT NULL,
+  `case_id` VARCHAR(64) NOT NULL,
+  `nik` CHAR(16) NOT NULL,
+  `participant_name` VARCHAR(150) NOT NULL,
+  `package_code` VARCHAR(40) NOT NULL DEFAULT 'BREVET_AB',
+  `attempt_number` INT NOT NULL DEFAULT 1,
+  `status` ENUM('IN_PROGRESS', 'PASSED', 'FAILED') NOT NULL DEFAULT 'IN_PROGRESS',
+  `score` INT NOT NULL DEFAULT 0,
+  `max_score` INT NOT NULL DEFAULT 100,
+  `passing_score` INT NOT NULL DEFAULT 75,
+  `results_json` JSON NOT NULL,
+  `certificate_number` VARCHAR(64) NOT NULL DEFAULT '',
+  `certificate_issued_at` VARCHAR(40) NOT NULL DEFAULT '',
+  `started_at` VARCHAR(40) NOT NULL,
+  `submitted_at` VARCHAR(40) NOT NULL DEFAULT '',
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_attempts_nik_case` (`nik`, `case_id`),
+  KEY `idx_attempts_status` (`status`, `created_at`),
+  KEY `idx_attempts_cert` (`certificate_number`),
+  CONSTRAINT `fk_attempts_case` FOREIGN KEY (`case_id`) REFERENCES `exam_cases` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 10. Tabel Pengaturan Sistem (Mode Whitelist Ketat, Callback Webhook kelasbrevet.com)
+CREATE TABLE IF NOT EXISTS `app_settings` (
+  `setting_key` VARCHAR(64) NOT NULL,
+  `setting_value` TEXT NOT NULL,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`setting_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;
+

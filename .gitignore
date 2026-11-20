@@ -10,3 +10,4 @@ coverage/
 .aistudio/
 workspace/
 hostinger-php-api/config.php
+public/assets/aistudio/
