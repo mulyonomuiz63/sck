@@ -1,0 +1,190 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated KelasBrevet simulator user account tied to Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "activeNik": { "type": "string", "pattern": "^[0-9]{16}$", "maxLength": 16 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "activeNik", "createdAt", "updatedAt"]
+    },
+    "TaxWorkspace": {
+      "title": "TaxWorkspace",
+      "description": "Per-NIK simulation workspace holding Orang Pribadi and Impersonate Badan taxpayer profiles.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "nik": { "type": "string", "pattern": "^[0-9]{16}$", "maxLength": 16 },
+        "opProfile": { "type": "object" },
+        "badanProfile": { "type": "object" },
+        "activeRole": { "type": "string", "enum": ["OP", "BADAN"] },
+        "guidedMode": { "type": "boolean" },
+        "activeCaseId": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "nik", "opProfile", "badanProfile", "activeRole", "guidedMode", "activeCaseId", "createdAt", "updatedAt"]
+    },
+    "EFakturInvoice": {
+      "title": "EFakturInvoice",
+      "description": "Simulated VAT e-Faktur invoice, special document, or return record.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "category": { "type": "string", "enum": ["OUTPUT", "INPUT", "SPECIAL_OUTPUT", "SPECIAL_INPUT", "OUTPUT_RETURN", "INPUT_RETURN"] },
+        "transactionCode": { "type": "string", "maxLength": 10 },
+        "invoiceNumber": { "type": "string", "maxLength": 40 },
+        "invoiceDate": { "type": "string", "maxLength": 20 },
+        "masaPajak": { "type": "integer" },
+        "tahunPajak": { "type": "integer" },
+        "counterpartyNpwp": { "type": "string", "maxLength": 24 },
+        "counterpartyName": { "type": "string", "maxLength": 150 },
+        "status": { "type": "string", "enum": ["CREATED", "APPROVED", "WAITING_FOR_AMENDMENT", "AMENDED", "WAITING_FOR_CANCELLATION", "CANCELED"] },
+        "creditStatus": { "type": "string", "enum": ["CREDITED", "UNCREDITED", "NA"] },
+        "dppTotal": { "type": "number" },
+        "dppNilaiLain": { "type": "number" },
+        "ppnTotal": { "type": "number" },
+        "ppnbmTotal": { "type": "number" },
+        "items": { "type": "array" },
+        "referenceDoc": { "type": "string", "maxLength": 100 },
+        "sp2dNumber": { "type": "string", "maxLength": 60 },
+        "amendmentOf": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "workspaceId", "category", "transactionCode", "invoiceNumber", "invoiceDate", "masaPajak", "tahunPajak", "counterpartyNpwp", "counterpartyName", "status", "creditStatus", "dppTotal", "dppNilaiLain", "ppnTotal", "ppnbmTotal", "items", "referenceDoc", "sp2dNumber", "amendmentOf", "createdAt", "updatedAt"]
+    },
+    "EBupotSlip": {
+      "title": "EBupotSlip",
+      "description": "Simulated withholding tax slip (MP TER, BP 21, BPA1, BPA2, BPPU PPh 23).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "slipType": { "type": "string", "enum": ["MP", "BP21", "BPA1", "BPA2", "BPPU"] },
+        "slipNumber": { "type": "string", "maxLength": 40 },
+        "masaPajak": { "type": "integer" },
+        "tahunPajak": { "type": "integer" },
+        "recipientNik": { "type": "string", "maxLength": 24 },
+        "recipientName": { "type": "string", "maxLength": 150 },
+        "ptkpStatus": { "type": "string", "maxLength": 16 },
+        "terCategory": { "type": "string", "maxLength": 8 },
+        "objectCode": { "type": "string", "maxLength": 24 },
+        "objectName": { "type": "string", "maxLength": 150 },
+        "grossAmount": { "type": "number" },
+        "taxRate": { "type": "number" },
+        "pphAmount": { "type": "number" },
+        "referenceDoc": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["BELUM_TERBIT", "TELAH_TERBIT", "DIBATALKAN"] },
+        "issuerNpwp": { "type": "string", "maxLength": 24 },
+        "issuerName": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "workspaceId", "slipType", "slipNumber", "masaPajak", "tahunPajak", "recipientNik", "recipientName", "ptkpStatus", "terCategory", "objectCode", "objectName", "grossAmount", "taxRate", "pphAmount", "referenceDoc", "status", "issuerNpwp", "issuerName", "createdAt", "updatedAt"]
+    },
+    "TaxReturn": {
+      "title": "TaxReturn",
+      "description": "Simulated periodic or annual tax return (SPT Masa PPN, PPh 21/26, Unifikasi, OP Tahunan, PPh Badan).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "taxpayerRole": { "type": "string", "enum": ["OP", "BADAN"] },
+        "returnType": { "type": "string", "enum": ["PPN", "PPH21_MASA", "PPH_UNIFIKASI", "PPH_OP_TAHUNAN", "PPH_BADAN_TAHUNAN"] },
+        "masaPajak": { "type": "integer" },
+        "tahunPajak": { "type": "integer" },
+        "pembetulanKe": { "type": "integer" },
+        "status": { "type": "string", "enum": ["KONSEP", "MENUNGGU_PEMBAYARAN", "DILAPORKAN"] },
+        "taxPosition": { "type": "string", "enum": ["NIHIL", "KURANG_BAYAR", "LEBIH_BAYAR"] },
+        "amountDue": { "type": "number" },
+        "bpeNumber": { "type": "string", "maxLength": 60 },
+        "billingCode": { "type": "string", "maxLength": 30 },
+        "submittedAt": { "type": "string", "maxLength": 40 },
+        "payload": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "workspaceId", "taxpayerRole", "returnType", "masaPajak", "tahunPajak", "pembetulanKe", "status", "taxPosition", "amountDue", "bpeNumber", "billingCode", "submittedAt", "payload", "createdAt", "updatedAt"]
+    },
+    "BillingCode": {
+      "title": "BillingCode",
+      "description": "Simulated 15-digit tax billing code and payment status.",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "taxpayerRole": { "type": "string", "enum": ["OP", "BADAN"] },
+        "billingNumber": { "type": "string", "maxLength": 24 },
+        "kapKjs": { "type": "string", "maxLength": 24 },
+        "description": { "type": "string", "maxLength": 160 },
+        "masaPajak": { "type": "integer" },
+        "tahunPajak": { "type": "integer" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["BELUM_BAYAR", "LUNAS"] },
+        "ntpn": { "type": "string", "maxLength": 32 },
+        "relatedReturnId": { "type": "string", "maxLength": 64 },
+        "paidAt": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "workspaceId", "taxpayerRole", "billingNumber", "kapKjs", "description", "masaPajak", "tahunPajak", "amount", "status", "ntpn", "relatedReturnId", "paidAt", "createdAt", "updatedAt"]
+    },
+    "LedgerEntry": {
+      "title": "LedgerEntry",
+      "description": "Simulated taxpayer general ledger entry (deposit balance and tax payments).",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workspaceId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "taxpayerRole": { "type": "string", "enum": ["OP", "BADAN"] },
+        "entryDate": { "type": "string", "maxLength": 40 },
+        "entryType": { "type": "string", "enum": ["DEPOSIT_TOPUP", "DEPOSIT_TRANSFER", "BILLING_PAYMENT", "TAX_ASSESSMENT"] },
+        "referenceNumber": { "type": "string", "maxLength": 60 },
+        "description": { "type": "string", "maxLength": 200 },
+        "debit": { "type": "number" },
+        "credit": { "type": "number" },
+        "balanceAfter": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "workspaceId", "taxpayerRole", "entryDate", "entryType", "referenceNumber", "description", "debit", "credit", "balanceAfter", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Owner-isolated simulator user account metadata."
+    },
+    "/users/{userId}/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/TaxWorkspace" },
+      "description": "Per-NIK simulation workspaces with OP and Badan taxpayer profiles."
+    },
+    "/users/{userId}/efaktur/{invoiceId}": {
+      "schema": { "$ref": "#/entities/EFakturInvoice" },
+      "description": "VAT e-Faktur output/input invoices, special documents, and returns."
+    },
+    "/users/{userId}/ebupot/{slipId}": {
+      "schema": { "$ref": "#/entities/EBupotSlip" },
+      "description": "Withholding tax slips (e-Bupot MP, BP21, BPA1, BPA2, BPPU)."
+    },
+    "/users/{userId}/taxReturns/{returnId}": {
+      "schema": { "$ref": "#/entities/TaxReturn" },
+      "description": "Periodic and annual tax returns (SPT Masa & SPT Tahunan)."
+    },
+    "/users/{userId}/billing/{billingId}": {
+      "schema": { "$ref": "#/entities/BillingCode" },
+      "description": "Tax billing codes and simulated payment receipts."
+    },
+    "/users/{userId}/ledger/{entryId}": {
+      "schema": { "$ref": "#/entities/LedgerEntry" },
+      "description": "Taxpayer general ledger transactions."
+    }
+  }
+}

@@ -1,0 +1,352 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function existing() {
+      return resource.data;
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    function isVerifiedOwner(userId) {
+      return isVerified() && request.auth.uid == userId;
+    }
+    function workspaceExists(userId, workspaceId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/workspaces/$(workspaceId));
+    }
+
+    // Validation Blueprints
+    function isValidUserAccount(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'activeNik', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'activeNik', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid == userId && data.uid == request.auth.uid && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 160
+        && data.displayName is string && data.displayName.size() <= 120
+        && data.activeNik is string && data.activeNik.size() == 16 && data.activeNik.matches('^[0-9]{16}$')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspace(data, userId) {
+      return data.keys().hasAll(['ownerId', 'nik', 'opProfile', 'badanProfile', 'activeRole', 'guidedMode', 'activeCaseId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'nik', 'opProfile', 'badanProfile', 'activeRole', 'guidedMode', 'activeCaseId', 'createdAt', 'updatedAt'])
+        && data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && data.nik is string && data.nik.size() == 16 && data.nik.matches('^[0-9]{16}$')
+        && data.opProfile is map && data.opProfile.size() <= 20
+        && data.badanProfile is map && data.badanProfile.size() <= 20
+        && data.activeRole in ['OP', 'BADAN']
+        && data.guidedMode is bool
+        && data.activeCaseId is string && data.activeCaseId.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEFaktur(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'workspaceId', 'category', 'transactionCode', 'invoiceNumber', 'invoiceDate',
+          'masaPajak', 'tahunPajak', 'counterpartyNpwp', 'counterpartyName', 'status', 'creditStatus',
+          'dppTotal', 'dppNilaiLain', 'ppnTotal', 'ppnbmTotal', 'items', 'referenceDoc', 'sp2dNumber',
+          'amendmentOf', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'workspaceId', 'category', 'transactionCode', 'invoiceNumber', 'invoiceDate',
+          'masaPajak', 'tahunPajak', 'counterpartyNpwp', 'counterpartyName', 'status', 'creditStatus',
+          'dppTotal', 'dppNilaiLain', 'ppnTotal', 'ppnbmTotal', 'items', 'referenceDoc', 'sp2dNumber',
+          'amendmentOf', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && isValidId(data.workspaceId) && data.workspaceId.size() <= 64
+        && data.category in ['OUTPUT', 'INPUT', 'SPECIAL_OUTPUT', 'SPECIAL_INPUT', 'OUTPUT_RETURN', 'INPUT_RETURN']
+        && data.transactionCode is string && data.transactionCode.size() <= 10
+        && data.invoiceNumber is string && data.invoiceNumber.size() <= 40
+        && data.invoiceDate is string && data.invoiceDate.size() <= 20
+        && data.masaPajak is int && data.masaPajak >= 1 && data.masaPajak <= 12
+        && data.tahunPajak is int && data.tahunPajak >= 2020 && data.tahunPajak <= 2035
+        && data.counterpartyNpwp is string && data.counterpartyNpwp.size() <= 24
+        && data.counterpartyName is string && data.counterpartyName.size() <= 150
+        && data.status in ['CREATED', 'APPROVED', 'WAITING_FOR_AMENDMENT', 'AMENDED', 'WAITING_FOR_CANCELLATION', 'CANCELED']
+        && data.creditStatus in ['CREDITED', 'UNCREDITED', 'NA']
+        && data.dppTotal is number && data.dppNilaiLain is number && data.ppnTotal is number && data.ppnbmTotal is number
+        && data.items is list && data.items.size() <= 50 && (data.items.size() == 0 || data.items[0] is map)
+        && data.referenceDoc is string && data.referenceDoc.size() <= 100
+        && data.sp2dNumber is string && data.sp2dNumber.size() <= 60
+        && data.amendmentOf is string && data.amendmentOf.size() <= 64
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEBupot(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'workspaceId', 'slipType', 'slipNumber', 'masaPajak', 'tahunPajak',
+          'recipientNik', 'recipientName', 'ptkpStatus', 'terCategory', 'objectCode', 'objectName',
+          'grossAmount', 'taxRate', 'pphAmount', 'referenceDoc', 'status', 'issuerNpwp', 'issuerName',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'workspaceId', 'slipType', 'slipNumber', 'masaPajak', 'tahunPajak',
+          'recipientNik', 'recipientName', 'ptkpStatus', 'terCategory', 'objectCode', 'objectName',
+          'grossAmount', 'taxRate', 'pphAmount', 'referenceDoc', 'status', 'issuerNpwp', 'issuerName',
+          'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && isValidId(data.workspaceId) && data.workspaceId.size() <= 64
+        && data.slipType in ['MP', 'BP21', 'BPA1', 'BPA2', 'BPPU']
+        && data.slipNumber is string && data.slipNumber.size() <= 40
+        && data.masaPajak is int && data.masaPajak >= 1 && data.masaPajak <= 12
+        && data.tahunPajak is int && data.tahunPajak >= 2020 && data.tahunPajak <= 2035
+        && data.recipientNik is string && data.recipientNik.size() <= 24
+        && data.recipientName is string && data.recipientName.size() <= 150
+        && data.ptkpStatus is string && data.ptkpStatus.size() <= 16
+        && data.terCategory is string && data.terCategory.size() <= 8
+        && data.objectCode is string && data.objectCode.size() <= 24
+        && data.objectName is string && data.objectName.size() <= 150
+        && data.grossAmount is number && data.taxRate is number && data.pphAmount is number
+        && data.referenceDoc is string && data.referenceDoc.size() <= 100
+        && data.status in ['BELUM_TERBIT', 'TELAH_TERBIT', 'DIBATALKAN']
+        && data.issuerNpwp is string && data.issuerNpwp.size() <= 24
+        && data.issuerName is string && data.issuerName.size() <= 150
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTaxReturn(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'workspaceId', 'taxpayerRole', 'returnType', 'masaPajak', 'tahunPajak',
+          'pembetulanKe', 'status', 'taxPosition', 'amountDue', 'bpeNumber', 'billingCode',
+          'submittedAt', 'payload', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'workspaceId', 'taxpayerRole', 'returnType', 'masaPajak', 'tahunPajak',
+          'pembetulanKe', 'status', 'taxPosition', 'amountDue', 'bpeNumber', 'billingCode',
+          'submittedAt', 'payload', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && isValidId(data.workspaceId) && data.workspaceId.size() <= 64
+        && data.taxpayerRole in ['OP', 'BADAN']
+        && data.returnType in ['PPN', 'PPH21_MASA', 'PPH_UNIFIKASI', 'PPH_OP_TAHUNAN', 'PPH_BADAN_TAHUNAN']
+        && data.masaPajak is int && data.masaPajak >= 1 && data.masaPajak <= 12
+        && data.tahunPajak is int && data.tahunPajak >= 2020 && data.tahunPajak <= 2035
+        && data.pembetulanKe is int && data.pembetulanKe >= 0 && data.pembetulanKe <= 20
+        && data.status in ['KONSEP', 'MENUNGGU_PEMBAYARAN', 'DILAPORKAN']
+        && data.taxPosition in ['NIHIL', 'KURANG_BAYAR', 'LEBIH_BAYAR']
+        && data.amountDue is number
+        && data.bpeNumber is string && data.bpeNumber.size() <= 60
+        && data.billingCode is string && data.billingCode.size() <= 30
+        && data.submittedAt is string && data.submittedAt.size() <= 40
+        && data.payload is map && data.payload.size() <= 60
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBilling(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'workspaceId', 'taxpayerRole', 'billingNumber', 'kapKjs', 'description',
+          'masaPajak', 'tahunPajak', 'amount', 'status', 'ntpn', 'relatedReturnId', 'paidAt',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'workspaceId', 'taxpayerRole', 'billingNumber', 'kapKjs', 'description',
+          'masaPajak', 'tahunPajak', 'amount', 'status', 'ntpn', 'relatedReturnId', 'paidAt',
+          'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && isValidId(data.workspaceId) && data.workspaceId.size() <= 64
+        && data.taxpayerRole in ['OP', 'BADAN']
+        && data.billingNumber is string && data.billingNumber.size() <= 24
+        && data.kapKjs is string && data.kapKjs.size() <= 24
+        && data.description is string && data.description.size() <= 160
+        && data.masaPajak is int && data.masaPajak >= 1 && data.masaPajak <= 12
+        && data.tahunPajak is int && data.tahunPajak >= 2020 && data.tahunPajak <= 2035
+        && data.amount is number && data.amount >= 0
+        && data.status in ['BELUM_BAYAR', 'LUNAS']
+        && data.ntpn is string && data.ntpn.size() <= 32
+        && data.relatedReturnId is string && data.relatedReturnId.size() <= 64
+        && data.paidAt is string && data.paidAt.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLedger(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'workspaceId', 'taxpayerRole', 'entryDate', 'entryType',
+          'referenceNumber', 'description', 'debit', 'credit', 'balanceAfter', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'workspaceId', 'taxpayerRole', 'entryDate', 'entryType',
+          'referenceNumber', 'description', 'debit', 'credit', 'balanceAfter', 'createdAt'
+        ])
+        && data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid && data.ownerId.size() <= 128
+        && isValidId(data.workspaceId) && data.workspaceId.size() <= 64
+        && data.taxpayerRole in ['OP', 'BADAN']
+        && data.entryDate is string && data.entryDate.size() <= 40
+        && data.entryType in ['DEPOSIT_TOPUP', 'DEPOSIT_TRANSFER', 'BILLING_PAYMENT', 'TAX_ASSESSMENT']
+        && data.referenceNumber is string && data.referenceNumber.size() <= 60
+        && data.description is string && data.description.size() <= 200
+        && data.debit is number && data.credit is number && data.balanceAfter is number
+        && data.createdAt is timestamp;
+    }
+
+    // Owner-scoped User Account (PII isolated to owner only)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserAccount(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['activeNik', 'displayName', 'email', 'updatedAt']);
+      allow delete: if false;
+
+      match /workspaces/{workspaceId} {
+        allow get: if isValidId(userId) && isValidId(workspaceId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(workspaceId)
+          && isValidWorkspace(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(workspaceId)
+          && isValidWorkspace(incoming(), userId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().nik == existing().nik
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['opProfile', 'badanProfile', 'activeRole', 'guidedMode', 'activeCaseId', 'updatedAt']);
+        allow delete: if isVerifiedOwner(userId) && isValidId(workspaceId) && existing().ownerId == request.auth.uid;
+      }
+
+      match /efaktur/{invoiceId} {
+        allow get: if isValidId(userId) && isValidId(invoiceId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(invoiceId)
+          && isValidEFaktur(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(userId, incoming().workspaceId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(invoiceId)
+          && isValidEFaktur(incoming(), userId)
+          && existing().status != 'CANCELED'
+          && incoming().ownerId == existing().ownerId
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'invoiceNumber', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['creditStatus', 'sp2dNumber', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['transactionCode', 'invoiceDate', 'counterpartyNpwp', 'counterpartyName', 'dppTotal', 'dppNilaiLain', 'ppnTotal', 'ppnbmTotal', 'items', 'referenceDoc', 'status', 'updatedAt'])
+          );
+        allow delete: if isVerifiedOwner(userId) && isValidId(invoiceId) && existing().ownerId == request.auth.uid;
+      }
+
+      match /ebupot/{slipId} {
+        allow get: if isValidId(userId) && isValidId(slipId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(slipId)
+          && isValidEBupot(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(userId, incoming().workspaceId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(slipId)
+          && isValidEBupot(incoming(), userId)
+          && existing().status != 'DIBATALKAN'
+          && incoming().ownerId == existing().ownerId
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'slipNumber', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['grossAmount', 'taxRate', 'pphAmount', 'objectCode', 'objectName', 'referenceDoc', 'ptkpStatus', 'terCategory', 'updatedAt'])
+          );
+        allow delete: if isVerifiedOwner(userId) && isValidId(slipId) && existing().ownerId == request.auth.uid;
+      }
+
+      match /taxReturns/{returnId} {
+        allow get: if isValidId(userId) && isValidId(returnId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(returnId)
+          && isValidTaxReturn(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(userId, incoming().workspaceId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(returnId)
+          && isValidTaxReturn(incoming(), userId)
+          && existing().status != 'DILAPORKAN'
+          && incoming().ownerId == existing().ownerId
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly(['payload', 'taxPosition', 'amountDue', 'updatedAt'])
+            || incoming().diff(existing()).affectedKeys().hasOnly(['status', 'taxPosition', 'amountDue', 'bpeNumber', 'billingCode', 'submittedAt', 'payload', 'updatedAt'])
+          );
+        allow delete: if isVerifiedOwner(userId) && isValidId(returnId) && existing().ownerId == request.auth.uid;
+      }
+
+      match /billing/{billingId} {
+        allow get: if isValidId(userId) && isValidId(billingId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(billingId)
+          && isValidBilling(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(userId, incoming().workspaceId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(billingId)
+          && isValidBilling(incoming(), userId)
+          && existing().status != 'LUNAS'
+          && incoming().ownerId == existing().ownerId
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().amount == existing().amount
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'ntpn', 'paidAt', 'updatedAt']);
+        allow delete: if isVerifiedOwner(userId) && isValidId(billingId) && existing().ownerId == request.auth.uid;
+      }
+
+      match /ledger/{entryId} {
+        allow get: if isValidId(userId) && isValidId(entryId) && isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(entryId)
+          && isValidLedger(incoming(), userId)
+          && incoming().createdAt == request.time
+          && workspaceExists(userId, incoming().workspaceId);
+        allow update: if false;
+        allow delete: if isVerifiedOwner(userId) && isValidId(entryId) && existing().ownerId == request.auth.uid;
+      }
+    }
+  }
+}
