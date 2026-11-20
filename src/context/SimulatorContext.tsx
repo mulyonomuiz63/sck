@@ -1,25 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import {
-  collection,
-  deleteDoc,
-  doc,
-  getDocs,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-} from 'firebase/firestore';
-import {
-  auth,
-  db,
-  handleFirestoreError,
-  OperationType,
-  signInWithGoogleCloud,
-  signOutGoogleCloud,
-} from '../lib/firebase';
+import { mysqlApi } from '../lib/apiClient';
 import {
   createDefaultSptBadanPayload,
   createDefaultSptOpPayload,
@@ -72,8 +52,6 @@ interface TteRequest {
 }
 
 interface SimulatorContextValue {
-  firebaseUser: User | null;
-  authLoading: boolean;
   isLoggedIn: boolean;
   snapshot: SimulatorSnapshot | null;
   activeNav: NavSection;
@@ -91,8 +69,6 @@ interface SimulatorContextValue {
   // Auth & session
   loginWithNik: (nik: string, customName?: string) => Promise<void>;
   logoutSimulator: () => void;
-  connectGoogleCloud: () => Promise<void>;
-  disconnectGoogleCloud: () => Promise<void>;
   // Workspace actions
   switchRole: (role: TaxpayerRole) => void;
   toggleGuidedMode: () => void;
@@ -138,19 +114,19 @@ interface SimulatorContextValue {
 
 const SimulatorContext = createContext<SimulatorContextValue | null>(null);
 
-const STORAGE_KEY_PREFIX = 'kelasbrevet_coretax_sim_v1_';
+const STORAGE_KEY_PREFIX = 'kelasbrevet_coretax_sim_v2_';
 const ACTIVE_NIK_KEY = 'kelasbrevet_coretax_active_nik';
 
-function saveLocalSnapshot(nik: string, data: SimulatorSnapshot) {
+function saveLocalCache(nik: string, data: SimulatorSnapshot) {
   try {
     localStorage.setItem(`${STORAGE_KEY_PREFIX}${nik}`, JSON.stringify(data));
     localStorage.setItem(ACTIVE_NIK_KEY, nik);
   } catch {
-    // ignore quota errors
+    // ignore storage quota errors
   }
 }
 
-function loadLocalSnapshot(nik: string): SimulatorSnapshot | null {
+function loadLocalCache(nik: string): SimulatorSnapshot | null {
   try {
     const raw = localStorage.getItem(`${STORAGE_KEY_PREFIX}${nik}`);
     if (!raw) return null;
@@ -199,14 +175,13 @@ function computeReturnPosition(returnType: TaxReturnType, payload: AnySptPayload
 }
 
 export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const [snapshot, setSnapshot] = useState<SimulatorSnapshot | null>(null);
   const [activeNav, setActiveNav] = useState<NavSection>('dashboard');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [tteRequest, setTteRequest] = useState<TteRequest | null>(null);
   const [previewDoc, setPreviewDoc] = useState<PrintableDocument | null>(null);
   const snapshotRef = useRef<SimulatorSnapshot | null>(null);
+  const sptSaveTimersRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     snapshotRef.current = snapshot;
@@ -224,158 +199,67 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Hydrate last active NIK from localStorage on initial load
+  // Hydrate active NIK session from MySQL backend (with instant local cache fallback)
   useEffect(() => {
+    let cancelled = false;
     const lastNik = localStorage.getItem(ACTIVE_NIK_KEY);
-    if (lastNik && /^\d{16}$/.test(lastNik)) {
-      const saved = loadLocalSnapshot(lastNik);
-      if (saved) {
-        setSnapshot(saved);
-      }
+    if (!lastNik || !/^\d{16}$/.test(lastNik)) return;
+
+    const cached = loadLocalCache(lastNik);
+    if (cached) {
+      setSnapshot(cached);
     }
+
+    (async () => {
+      const fromDb = (await mysqlApi.getWorkspace(lastNik)) || (await mysqlApi.loginNik(lastNik, cached?.workspace.opProfile.nama));
+      if (!cancelled && fromDb) {
+        saveLocalCache(lastNik, fromDb);
+        setSnapshot(fromDb);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Listen to Firebase Auth state
+  // Clean up any pending debounced SPT timers on unmount
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      setAuthLoading(false);
-    });
-    return () => unsub();
+    const timers = sptSaveTimersRef.current;
+    return () => {
+      for (const t of Object.values(timers)) {
+        window.clearTimeout(t);
+      }
+    };
   }, []);
-
-  // Sync a full snapshot to Firestore when user is verified & signed in with Google
-  const syncSnapshotToCloud = useCallback(
-    async (data: SimulatorSnapshot, user: User | null) => {
-      if (!user || !user.emailVerified) return;
-      const uid = user.uid;
-      const ws = data.workspace;
-      const wsPath = `users/${uid}/workspaces/${ws.id}`;
-      try {
-        await setDoc(
-          doc(db, 'users', uid),
-          {
-            uid,
-            email: user.email || 'peserta@kelasbrevet.simulasi',
-            displayName: user.displayName || ws.opProfile.nama,
-            activeNik: ws.nik,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-          { merge: false }
-        ).catch(async () => {
-          await updateDoc(doc(db, 'users', uid), {
-            activeNik: ws.nik,
-            displayName: user.displayName || ws.opProfile.nama,
-            email: user.email || 'peserta@kelasbrevet.simulasi',
-            updatedAt: serverTimestamp(),
-          });
-        });
-
-        await setDoc(
-          doc(db, 'users', uid, 'workspaces', ws.id),
-          {
-            ownerId: uid,
-            nik: ws.nik,
-            opProfile: ws.opProfile,
-            badanProfile: ws.badanProfile,
-            activeRole: ws.activeRole,
-            guidedMode: ws.guidedMode,
-            activeCaseId: ws.activeCaseId,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          },
-          { merge: false }
-        ).catch(async () => {
-          await updateDoc(doc(db, 'users', uid, 'workspaces', ws.id), {
-            opProfile: ws.opProfile,
-            badanProfile: ws.badanProfile,
-            activeRole: ws.activeRole,
-            guidedMode: ws.guidedMode,
-            activeCaseId: ws.activeCaseId,
-            updatedAt: serverTimestamp(),
-          });
-        });
-      } catch (err) {
-        try {
-          handleFirestoreError(err, OperationType.WRITE, wsPath);
-        } catch {
-          // non-fatal sync log
-        }
-      }
-    },
-    []
-  );
-
-  // Persist individual entity writes to Firestore when signed in
-  const syncDocToCloud = useCallback(
-    async (
-      colName: 'efaktur' | 'ebupot' | 'taxReturns' | 'billing' | 'ledger',
-      docId: string,
-      payload: Record<string, unknown>,
-      isUpdate = false
-    ) => {
-      const user = auth.currentUser;
-      if (!user || !user.emailVerified) return;
-      const uid = user.uid;
-      const path = `users/${uid}/${colName}/${docId}`;
-      try {
-        if (isUpdate && colName !== 'ledger') {
-          await updateDoc(doc(db, 'users', uid, colName, docId), {
-            ...payload,
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          const base: Record<string, unknown> = {
-            ...payload,
-            ownerId: uid,
-            createdAt: serverTimestamp(),
-          };
-          if (colName !== 'ledger') {
-            base.updatedAt = serverTimestamp();
-          }
-          await setDoc(doc(db, 'users', uid, colName, docId), base);
-        }
-      } catch (err) {
-        try {
-          handleFirestoreError(err, isUpdate ? OperationType.UPDATE : OperationType.CREATE, path);
-        } catch {
-          // keep UI responsive
-        }
-      }
-    },
-    []
-  );
-
-  const deleteDocFromCloud = useCallback(
-    async (colName: 'efaktur' | 'ebupot' | 'taxReturns' | 'billing' | 'ledger', docId: string) => {
-      const user = auth.currentUser;
-      if (!user || !user.emailVerified) return;
-      const path = `users/${user.uid}/${colName}/${docId}`;
-      try {
-        await deleteDoc(doc(db, 'users', user.uid, colName, docId));
-      } catch (err) {
-        try {
-          handleFirestoreError(err, OperationType.DELETE, path);
-        } catch {
-          // non-fatal
-        }
-      }
-    },
-    []
-  );
 
   const updateSnapshot = useCallback(
     (updater: (prev: SimulatorSnapshot) => SimulatorSnapshot) => {
       setSnapshot((prev) => {
         if (!prev) return prev;
         const next = updater(prev);
-        saveLocalSnapshot(next.workspace.nik, next);
+        saveLocalCache(next.workspace.nik, next);
         return next;
       });
     },
     []
   );
+
+  const scheduleTaxReturnSave = useCallback((nik: string, updatedReturn: TaxReturn, immediate = false) => {
+    const existingTimer = sptSaveTimersRef.current[updatedReturn.id];
+    if (existingTimer) {
+      window.clearTimeout(existingTimer);
+      delete sptSaveTimersRef.current[updatedReturn.id];
+    }
+    if (immediate) {
+      void mysqlApi.saveTaxReturn(nik, updatedReturn);
+      return;
+    }
+    sptSaveTimersRef.current[updatedReturn.id] = window.setTimeout(() => {
+      delete sptSaveTimersRef.current[updatedReturn.id];
+      void mysqlApi.saveTaxReturn(nik, updatedReturn);
+    }, 350);
+  }, []);
 
   const loginWithNik = useCallback(
     async (nikRaw: string, customName?: string) => {
@@ -385,73 +269,19 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return;
       }
 
-      const existingLocal = loadLocalSnapshot(nik);
-      let loaded: SimulatorSnapshot;
-      if (existingLocal) {
-        loaded = existingLocal;
-      } else {
-        loaded = createSeedSnapshot(nik, firebaseUser?.uid || 'local_user', customName);
-      }
+      // Primary source of truth: MySQL backend API
+      const fromDb = await mysqlApi.loginNik(nik, customName);
+      const loaded = fromDb || loadLocalCache(nik) || createSeedSnapshot(nik, 'mysql_user', customName);
 
-      // If signed into Firebase Cloud, check if cloud has workspace records for this NIK
-      if (firebaseUser && firebaseUser.emailVerified) {
-        const uid = firebaseUser.uid;
-        const wsId = `ws_${nik}`;
-        try {
-          const wsSnap = await getDocs(
-            query(collection(db, 'users', uid, 'workspaces'), where('ownerId', '==', uid))
-          );
-          const foundWs = wsSnap.docs.find((d) => d.id === wsId);
-          if (foundWs) {
-            const wsData = foundWs.data();
-            const [efSnap, ebSnap, trSnap, biSnap, leSnap] = await Promise.all([
-              getDocs(query(collection(db, 'users', uid, 'efaktur'), where('ownerId', '==', uid))),
-              getDocs(query(collection(db, 'users', uid, 'ebupot'), where('ownerId', '==', uid))),
-              getDocs(query(collection(db, 'users', uid, 'taxReturns'), where('ownerId', '==', uid))),
-              getDocs(query(collection(db, 'users', uid, 'billing'), where('ownerId', '==', uid))),
-              getDocs(query(collection(db, 'users', uid, 'ledger'), where('ownerId', '==', uid))),
-            ]);
-            loaded = {
-              workspace: {
-                id: wsId,
-                ownerId: uid,
-                nik: wsData.nik,
-                opProfile: wsData.opProfile,
-                badanProfile: wsData.badanProfile,
-                activeRole: wsData.activeRole,
-                guidedMode: wsData.guidedMode,
-                activeCaseId: wsData.activeCaseId,
-              },
-              efaktur: efSnap.docs
-                .map((d) => ({ id: d.id, ...(d.data() as Omit<EFakturInvoice, 'id'>) }))
-                .filter((x) => x.workspaceId === wsId),
-              ebupot: ebSnap.docs
-                .map((d) => ({ id: d.id, ...(d.data() as Omit<EBupotSlip, 'id'>) }))
-                .filter((x) => x.workspaceId === wsId),
-              taxReturns: trSnap.docs
-                .map((d) => ({ id: d.id, ...(d.data() as Omit<TaxReturn, 'id'>) }))
-                .filter((x) => x.workspaceId === wsId),
-              billing: biSnap.docs
-                .map((d) => ({ id: d.id, ...(d.data() as Omit<BillingCode, 'id'>) }))
-                .filter((x) => x.workspaceId === wsId),
-              ledger: leSnap.docs
-                .map((d) => ({ id: d.id, ...(d.data() as Omit<LedgerEntry, 'id'>) }))
-                .filter((x) => x.workspaceId === wsId),
-            };
-          } else {
-            await syncSnapshotToCloud(loaded, firebaseUser);
-          }
-        } catch {
-          // fallback cleanly to local snapshot
-        }
-      }
-
-      saveLocalSnapshot(nik, loaded);
+      saveLocalCache(nik, loaded);
       setSnapshot(loaded);
       setActiveNav('dashboard');
-      pushToast('success', `Selamat datang, ${loaded.workspace.opProfile.nama}. Akun OP & Impersonate Badan siap digunakan.`);
+      pushToast(
+        'success',
+        `Selamat datang, ${loaded.workspace.opProfile.nama}. Akun OP & Impersonate Badan siap digunakan.`
+      );
     },
-    [firebaseUser, pushToast, syncSnapshotToCloud]
+    [pushToast]
   );
 
   const logoutSimulator = useCallback(() => {
@@ -461,33 +291,15 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     pushToast('info', 'Anda telah keluar dari sesi simulasi NIK.');
   }, [pushToast]);
 
-  const connectGoogleCloud = useCallback(async () => {
-    try {
-      const cred = await signInWithGoogleCloud();
-      pushToast('success', `Sinkronisasi Cloud aktif untuk ${cred.user.email}.`);
-      if (snapshotRef.current) {
-        await syncSnapshotToCloud(snapshotRef.current, cred.user);
-      }
-    } catch (error) {
-      pushToast('error', error instanceof Error ? error.message : 'Gagal menghubungkan akun Google.');
-    }
-  }, [pushToast, syncSnapshotToCloud]);
-
-  const disconnectGoogleCloud = useCallback(async () => {
-    await signOutGoogleCloud();
-    pushToast('info', 'Sinkronisasi Cloud diputuskan. Sesi NIK lokal tetap aktif.');
-  }, [pushToast]);
-
   const switchRole = useCallback(
     (role: TaxpayerRole) => {
-      updateSnapshot((prev) => {
-        const next: SimulatorSnapshot = {
-          ...prev,
-          workspace: { ...prev.workspace, activeRole: role },
-        };
-        void syncSnapshotToCloud(next, auth.currentUser);
-        return next;
-      });
+      const cur = snapshotRef.current;
+      if (!cur) return;
+      updateSnapshot((prev) => ({
+        ...prev,
+        workspace: { ...prev.workspace, activeRole: role },
+      }));
+      void mysqlApi.updateWorkspace(cur.workspace.nik, { activeRole: role });
       pushToast(
         'info',
         role === 'BADAN'
@@ -495,73 +307,66 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           : 'Kembali ke Akun Utama: Wajib Pajak Orang Pribadi (OP).'
       );
     },
-    [pushToast, syncSnapshotToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const toggleGuidedMode = useCallback(() => {
+    const cur = snapshotRef.current;
+    if (!cur) return;
+    const nextGuided = !cur.workspace.guidedMode;
     updateSnapshot((prev) => ({
       ...prev,
-      workspace: { ...prev.workspace, guidedMode: !prev.workspace.guidedMode },
+      workspace: { ...prev.workspace, guidedMode: nextGuided },
     }));
+    void mysqlApi.updateWorkspace(cur.workspace.nik, { guidedMode: nextGuided });
   }, [updateSnapshot]);
 
   const setActiveCaseId = useCallback(
     (caseId: string) => {
+      const cur = snapshotRef.current;
+      if (!cur) return;
       updateSnapshot((prev) => ({
         ...prev,
         workspace: { ...prev.workspace, activeCaseId: caseId, guidedMode: true },
       }));
+      void mysqlApi.updateWorkspace(cur.workspace.nik, { activeCaseId: caseId, guidedMode: true });
     },
     [updateSnapshot]
   );
 
   const updateProfiles = useCallback(
     (op: Partial<TaxpayerProfileOP>, badan: Partial<TaxpayerProfileBadan>) => {
-      updateSnapshot((prev) => {
-        const next: SimulatorSnapshot = {
-          ...prev,
-          workspace: {
-            ...prev.workspace,
-            opProfile: { ...prev.workspace.opProfile, ...op },
-            badanProfile: { ...prev.workspace.badanProfile, ...badan },
-          },
-        };
-        void syncSnapshotToCloud(next, auth.currentUser);
-        return next;
+      const cur = snapshotRef.current;
+      if (!cur) return;
+      const nextOp = { ...cur.workspace.opProfile, ...op };
+      const nextBadan = { ...cur.workspace.badanProfile, ...badan };
+      updateSnapshot((prev) => ({
+        ...prev,
+        workspace: {
+          ...prev.workspace,
+          opProfile: nextOp,
+          badanProfile: nextBadan,
+        },
+      }));
+      void mysqlApi.updateWorkspace(cur.workspace.nik, {
+        opProfile: nextOp,
+        badanProfile: nextBadan,
       });
       pushToast('success', 'Perubahan profil wajib pajak & kode otorisasi berhasil disimpan.');
     },
-    [pushToast, syncSnapshotToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const resetSimulationData = useCallback(async () => {
     const current = snapshotRef.current;
     if (!current) return;
-    const fresh = createSeedSnapshot(
-      current.workspace.nik,
-      firebaseUser?.uid || 'local_user',
-      current.workspace.opProfile.nama
-    );
-    saveLocalSnapshot(fresh.workspace.nik, fresh);
+    const nik = current.workspace.nik;
+    const freshFromDb = await mysqlApi.resetWorkspace(nik);
+    const fresh = freshFromDb || createSeedSnapshot(nik, 'mysql_user', current.workspace.opProfile.nama);
+    saveLocalCache(nik, fresh);
     setSnapshot(fresh);
-
-    if (firebaseUser && firebaseUser.emailVerified) {
-      try {
-        const batch = writeBatch(db);
-        const uid = firebaseUser.uid;
-        for (const inv of current.efaktur) batch.delete(doc(db, 'users', uid, 'efaktur', inv.id));
-        for (const sl of current.ebupot) batch.delete(doc(db, 'users', uid, 'ebupot', sl.id));
-        for (const tr of current.taxReturns) batch.delete(doc(db, 'users', uid, 'taxReturns', tr.id));
-        for (const bi of current.billing) batch.delete(doc(db, 'users', uid, 'billing', bi.id));
-        for (const le of current.ledger) batch.delete(doc(db, 'users', uid, 'ledger', le.id));
-        await batch.commit();
-        await syncSnapshotToCloud(fresh, firebaseUser);
-      } catch {
-        // non-fatal
-      }
-    }
     pushToast('info', 'Seluruh data simulasi telah direset ke kondisi awal studi kasus KelasBrevet.');
-  }, [firebaseUser, pushToast, syncSnapshotToCloud]);
+  }, [pushToast]);
 
   // --- e-Faktur Actions ---
   const createEFaktur = useCallback(
@@ -575,113 +380,114 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: new Date().toISOString(),
       };
       updateSnapshot((prev) => ({ ...prev, efaktur: [newInv, ...prev.efaktur] }));
-      const { id, createdAtIso: _c, ...cloudData } = newInv;
-      void syncDocToCloud('efaktur', id, cloudData, false);
+      void mysqlApi.saveEFaktur(cur.workspace.nik, newInv);
       pushToast('success', `Draft e-Faktur (${newInv.invoiceNumber}) berhasil disimpan.`);
       return newInv;
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const approveEFaktur = useCallback(
     (invoiceId: string) => {
       const cur = snapshotRef.current;
       const target = cur?.efaktur.find((i) => i.id === invoiceId);
-      if (!target) return;
+      if (!cur || !target) return;
       const nsfp =
         target.category === 'OUTPUT' || target.category === 'OUTPUT_RETURN'
           ? generateNsfp(target.transactionCode, Boolean(target.amendmentOf))
           : target.invoiceNumber;
 
+      const updated: EFakturInvoice = { ...target, status: 'APPROVED', invoiceNumber: nsfp };
       updateSnapshot((prev) => ({
         ...prev,
-        efaktur: prev.efaktur.map((i) =>
-          i.id === invoiceId ? { ...i, status: 'APPROVED', invoiceNumber: nsfp } : i
-        ),
+        efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? updated : i)),
       }));
-      void syncDocToCloud('efaktur', invoiceId, { status: 'APPROVED', invoiceNumber: nsfp }, true);
+      void mysqlApi.saveEFaktur(cur.workspace.nik, updated);
       pushToast('success', `Faktur Pajak disetujui (APPROVED). NSFP: ${nsfp}`);
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const requestAmendEFaktur = useCallback(
     (invoiceId: string) => {
+      const cur = snapshotRef.current;
+      const target = cur?.efaktur.find((i) => i.id === invoiceId);
+      if (!cur || !target) return;
+      const updated: EFakturInvoice = { ...target, status: 'WAITING_FOR_AMENDMENT' };
       updateSnapshot((prev) => ({
         ...prev,
-        efaktur: prev.efaktur.map((i) =>
-          i.id === invoiceId ? { ...i, status: 'WAITING_FOR_AMENDMENT' } : i
-        ),
+        efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? updated : i)),
       }));
-      void syncDocToCloud('efaktur', invoiceId, { status: 'WAITING_FOR_AMENDMENT' }, true);
+      void mysqlApi.saveEFaktur(cur.workspace.nik, updated);
       pushToast(
         'info',
         'Permintaan Faktur Pengganti dikirim. Klik ikon Lonceng Notifikasi di atas untuk mensimulasikan persetujuan pembeli.'
       );
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const requestCancelEFaktur = useCallback(
     (invoiceId: string) => {
+      const cur = snapshotRef.current;
+      const target = cur?.efaktur.find((i) => i.id === invoiceId);
+      if (!cur || !target) return;
+      const updated: EFakturInvoice = { ...target, status: 'WAITING_FOR_CANCELLATION' };
       updateSnapshot((prev) => ({
         ...prev,
-        efaktur: prev.efaktur.map((i) =>
-          i.id === invoiceId ? { ...i, status: 'WAITING_FOR_CANCELLATION' } : i
-        ),
+        efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? updated : i)),
       }));
-      void syncDocToCloud('efaktur', invoiceId, { status: 'WAITING_FOR_CANCELLATION' }, true);
+      void mysqlApi.saveEFaktur(cur.workspace.nik, updated);
       pushToast(
         'info',
         'Permintaan Pembatalan Faktur dikirim. Klik ikon Lonceng Notifikasi di atas untuk mensimulasikan persetujuan pembeli.'
       );
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const approveBuyerNotification = useCallback(
     (invoiceId: string) => {
       const cur = snapshotRef.current;
       const target = cur?.efaktur.find((i) => i.id === invoiceId);
-      if (!target) return;
+      if (!cur || !target) return;
 
       if (target.status === 'WAITING_FOR_CANCELLATION') {
+        const updated: EFakturInvoice = { ...target, status: 'CANCELED' };
         updateSnapshot((prev) => ({
           ...prev,
-          efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? { ...i, status: 'CANCELED' } : i)),
+          efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? updated : i)),
         }));
-        void syncDocToCloud('efaktur', invoiceId, { status: 'CANCELED' }, true);
+        void mysqlApi.saveEFaktur(cur.workspace.nik, updated);
         pushToast('success', `Pembeli menyetujui pembatalan. Faktur ${target.invoiceNumber} kini berstatus CANCELED.`);
       } else if (target.status === 'WAITING_FOR_AMENDMENT') {
         const amendedNsfp = generateNsfp(target.transactionCode, true);
+        const updated: EFakturInvoice = { ...target, status: 'AMENDED', invoiceNumber: amendedNsfp };
         updateSnapshot((prev) => ({
           ...prev,
-          efaktur: prev.efaktur.map((i) =>
-            i.id === invoiceId ? { ...i, status: 'AMENDED', invoiceNumber: amendedNsfp } : i
-          ),
+          efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? updated : i)),
         }));
-        void syncDocToCloud('efaktur', invoiceId, { status: 'AMENDED', invoiceNumber: amendedNsfp }, true);
+        void mysqlApi.saveEFaktur(cur.workspace.nik, updated);
         pushToast('success', `Pembeli menyetujui penggantian. NSFP Pengganti: ${amendedNsfp} (AMENDED).`);
       }
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const toggleCreditInputEFaktur = useCallback(
     (invoiceId: string, sp2dNumber?: string) => {
       const cur = snapshotRef.current;
       const target = cur?.efaktur.find((i) => i.id === invoiceId);
-      if (!target) return;
+      if (!cur || !target) return;
       const nextCredit = target.creditStatus === 'CREDITED' ? 'UNCREDITED' : 'CREDITED';
       const nextSp2d = sp2dNumber !== undefined ? sp2dNumber : target.sp2dNumber;
+      const updated: EFakturInvoice = { ...target, creditStatus: nextCredit, sp2dNumber: nextSp2d };
 
       updateSnapshot((prev) => ({
         ...prev,
-        efaktur: prev.efaktur.map((i) =>
-          i.id === invoiceId ? { ...i, creditStatus: nextCredit, sp2dNumber: nextSp2d } : i
-        ),
+        efaktur: prev.efaktur.map((i) => (i.id === invoiceId ? updated : i)),
       }));
-      void syncDocToCloud('efaktur', invoiceId, { creditStatus: nextCredit, sp2dNumber: nextSp2d }, true);
+      void mysqlApi.saveEFaktur(cur.workspace.nik, updated);
       pushToast(
         'success',
         nextCredit === 'CREDITED'
@@ -689,19 +495,21 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           : `Faktur Masukan ${target.invoiceNumber} dipindahkan ke Tidak Dikreditkan (Lampiran B-3).`
       );
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const deleteEFaktur = useCallback(
     (invoiceId: string) => {
+      const cur = snapshotRef.current;
+      if (!cur) return;
       updateSnapshot((prev) => ({
         ...prev,
         efaktur: prev.efaktur.filter((i) => i.id !== invoiceId),
       }));
-      void deleteDocFromCloud('efaktur', invoiceId);
+      void mysqlApi.deleteEFaktur(cur.workspace.nik, invoiceId);
       pushToast('info', 'Draft e-Faktur dihapus.');
     },
-    [deleteDocFromCloud, pushToast, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   // --- e-Bupot Actions ---
@@ -716,12 +524,11 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: new Date().toISOString(),
       };
       updateSnapshot((prev) => ({ ...prev, ebupot: [newSlip, ...prev.ebupot] }));
-      const { id, createdAtIso: _c, ...cloudData } = newSlip;
-      void syncDocToCloud('ebupot', id, cloudData, false);
+      void mysqlApi.saveEBupotBatch(cur.workspace.nik, [newSlip]);
       pushToast('success', `Bukti Potong ${newSlip.slipType} tersimpan di daftar Belum Terbit.`);
       return newSlip;
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const importEBupotBatch = useCallback(
@@ -735,61 +542,68 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: new Date().toISOString(),
       }));
       updateSnapshot((prev) => ({ ...prev, ebupot: [...created, ...prev.ebupot] }));
-      for (const s of created) {
-        const { id, createdAtIso: _c, ...cloudData } = s;
-        void syncDocToCloud('ebupot', id, cloudData, false);
-      }
+      void mysqlApi.saveEBupotBatch(cur.workspace.nik, created);
       pushToast('success', `Berhasil mengimpor ${created.length} data Bukti Potong ke status Belum Terbit.`);
       return created.length;
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const issueEBupotSlips = useCallback(
     (slipIds: string[]) => {
+      const cur = snapshotRef.current;
+      if (!cur) return;
       const idSet = new Set(slipIds);
-      const issuedNumbers = new Map<string, string>();
+      const updatedSlips: EBupotSlip[] = [];
 
-      updateSnapshot((prev) => ({
-        ...prev,
-        ebupot: prev.ebupot.map((sl) => {
-          if (!idSet.has(sl.id) || sl.status !== 'BELUM_TERBIT') return sl;
-          const num = generateSlipNumber(sl.slipType);
-          issuedNumbers.set(sl.id, num);
-          return { ...sl, status: 'TELAH_TERBIT', slipNumber: num };
-        }),
-      }));
+      const nextList = cur.ebupot.map((sl) => {
+        if (!idSet.has(sl.id) || sl.status !== 'BELUM_TERBIT') return sl;
+        const issued: EBupotSlip = {
+          ...sl,
+          status: 'TELAH_TERBIT',
+          slipNumber: generateSlipNumber(sl.slipType),
+        };
+        updatedSlips.push(issued);
+        return issued;
+      });
 
-      for (const [sid, num] of issuedNumbers.entries()) {
-        void syncDocToCloud('ebupot', sid, { status: 'TELAH_TERBIT', slipNumber: num }, true);
-      }
-      pushToast('success', `${issuedNumbers.size} Bukti Potong berhasil diterbitkan (TTE) & siap diposting ke SPT.`);
+      if (updatedSlips.length === 0) return;
+
+      updateSnapshot((prev) => ({ ...prev, ebupot: nextList }));
+      void mysqlApi.saveEBupotBatch(cur.workspace.nik, updatedSlips);
+      pushToast('success', `${updatedSlips.length} Bukti Potong berhasil diterbitkan (TTE) & siap diposting ke SPT.`);
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const cancelEBupotSlip = useCallback(
     (slipId: string) => {
+      const cur = snapshotRef.current;
+      const target = cur?.ebupot.find((sl) => sl.id === slipId);
+      if (!cur || !target) return;
+      const updated: EBupotSlip = { ...target, status: 'DIBATALKAN' };
       updateSnapshot((prev) => ({
         ...prev,
-        ebupot: prev.ebupot.map((sl) => (sl.id === slipId ? { ...sl, status: 'DIBATALKAN' } : sl)),
+        ebupot: prev.ebupot.map((sl) => (sl.id === slipId ? updated : sl)),
       }));
-      void syncDocToCloud('ebupot', slipId, { status: 'DIBATALKAN' }, true);
+      void mysqlApi.saveEBupotBatch(cur.workspace.nik, [updated]);
       pushToast('info', 'Bukti Potong telah dibatalkan.');
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const deleteEBupotSlip = useCallback(
     (slipId: string) => {
+      const cur = snapshotRef.current;
+      if (!cur) return;
       updateSnapshot((prev) => ({
         ...prev,
         ebupot: prev.ebupot.filter((sl) => sl.id !== slipId),
       }));
-      void deleteDocFromCloud('ebupot', slipId);
+      void mysqlApi.deleteEBupot(cur.workspace.nik, slipId);
       pushToast('info', 'Draft Bukti Potong dihapus.');
     },
-    [deleteDocFromCloud, pushToast, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   // --- SPT Actions ---
@@ -829,30 +643,28 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       };
 
       updateSnapshot((prev) => ({ ...prev, taxReturns: [newReturn, ...prev.taxReturns] }));
-      const { id, createdAtIso: _c, ...cloudData } = newReturn;
-      void syncDocToCloud('taxReturns', id, cloudData, false);
+      void mysqlApi.saveTaxReturn(cur.workspace.nik, newReturn);
       pushToast('success', 'Konsep SPT berhasil dibuat. Silakan klik Posting SPT untuk prepopulate data.');
       return newReturn;
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const updateTaxReturnPayload = useCallback(
     (returnId: string, payload: AnySptPayload) => {
       const cur = snapshotRef.current;
       const target = cur?.taxReturns.find((r) => r.id === returnId);
-      if (!target || target.status === 'DILAPORKAN') return;
+      if (!cur || !target || target.status === 'DILAPORKAN') return;
 
       const { taxPosition, amountDue } = computeReturnPosition(target.returnType, payload);
+      const updatedReturn: TaxReturn = { ...target, payload, taxPosition, amountDue };
       updateSnapshot((prev) => ({
         ...prev,
-        taxReturns: prev.taxReturns.map((r) =>
-          r.id === returnId ? { ...r, payload, taxPosition, amountDue } : r
-        ),
+        taxReturns: prev.taxReturns.map((r) => (r.id === returnId ? updatedReturn : r)),
       }));
-      void syncDocToCloud('taxReturns', returnId, { payload, taxPosition, amountDue }, true);
+      scheduleTaxReturnSave(cur.workspace.nik, updatedReturn, false);
     },
-    [syncDocToCloud, updateSnapshot]
+    [scheduleTaxReturnSave, updateSnapshot]
   );
 
   const postTaxReturnData = useCallback(
@@ -863,6 +675,17 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       if (!target) return;
 
       const nowIso = new Date().toISOString();
+
+      const applyPosted = (nextPayload: AnySptPayload, toastMsg: string) => {
+        const { taxPosition, amountDue } = computeReturnPosition(target.returnType, nextPayload);
+        const updatedReturn: TaxReturn = { ...target, payload: nextPayload, taxPosition, amountDue };
+        updateSnapshot((prev) => ({
+          ...prev,
+          taxReturns: prev.taxReturns.map((r) => (r.id === returnId ? updatedReturn : r)),
+        }));
+        scheduleTaxReturnSave(cur.workspace.nik, updatedReturn, true);
+        pushToast('success', toastMsg);
+      };
 
       if (target.returnType === 'PPN') {
         const periodInvoices = cur.efaktur.filter(
@@ -924,8 +747,7 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           b3TidakDikreditkanPpn,
           linkedInvoiceIds: periodInvoices.map((i) => i.id),
         };
-        updateTaxReturnPayload(returnId, nextPayload);
-        pushToast('success', `Posting SPT Masa PPN berhasil menarik ${periodInvoices.length} dokumen e-Faktur.`);
+        applyPosted(nextPayload, `Posting SPT Masa PPN berhasil menarik ${periodInvoices.length} dokumen e-Faktur.`);
         return;
       }
 
@@ -956,8 +778,7 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           pphBpa1: bpa.reduce((a, s) => a + s.pphAmount, 0),
           linkedSlipIds: periodSlips.map((s) => s.id),
         };
-        updateTaxReturnPayload(returnId, nextPayload);
-        pushToast('success', `Posting SPT Masa PPh 21/26 menarik ${periodSlips.length} Bukti Potong terbit.`);
+        applyPosted(nextPayload, `Posting SPT Masa PPh 21/26 menarik ${periodSlips.length} Bukti Potong terbit.`);
         return;
       }
 
@@ -979,8 +800,7 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           pph23Terutang: periodSlips.reduce((a, s) => a + s.pphAmount, 0),
           linkedSlipIds: periodSlips.map((s) => s.id),
         };
-        updateTaxReturnPayload(returnId, nextPayload);
-        pushToast('success', `Posting SPT Masa PPh Unifikasi menarik ${periodSlips.length} Bukti Potong BPPU.`);
+        applyPosted(nextPayload, `Posting SPT Masa PPh Unifikasi menarik ${periodSlips.length} Bukti Potong BPPU.`);
         return;
       }
 
@@ -1007,18 +827,19 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           ptkpStatus: mySlips[0]?.ptkpStatus && mySlips[0].ptkpStatus !== 'NA' ? mySlips[0].ptkpStatus : prevPayload.ptkpStatus,
           linkedSlipIds: mySlips.map((s) => s.id),
         };
-        updateTaxReturnPayload(returnId, nextPayload);
-        pushToast('success', `Posting SPT Tahunan OP berhasil menarik ${mySlips.length} Bukti Potong BPA1/BPA2.`);
+        applyPosted(nextPayload, `Posting SPT Tahunan OP berhasil menarik ${mySlips.length} Bukti Potong BPA1/BPA2.`);
         return;
       }
 
       if (target.returnType === 'PPH_BADAN_TAHUNAN') {
         const prevPayload = target.payload as SptBadanTahunanPayload;
-        updateTaxReturnPayload(returnId, { ...prevPayload, postedAt: nowIso });
-        pushToast('success', 'Posting SPT Tahunan PPh Badan berhasil memperbarui ringkasan fiskal.');
+        applyPosted(
+          { ...prevPayload, postedAt: nowIso },
+          'Posting SPT Tahunan PPh Badan berhasil memperbarui ringkasan fiskal.'
+        );
       }
     },
-    [pushToast, updateTaxReturnPayload]
+    [pushToast, scheduleTaxReturnSave, updateSnapshot]
   );
 
   const submitTaxReturn = useCallback(
@@ -1041,27 +862,19 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       // Case 1: Nihil or Lebih Bayar -> immediate DILAPORKAN + BPE
       if (taxPosition !== 'KURANG_BAYAR' || amountDue <= 0) {
         const bpe = generateBpeNumber();
+        const updatedReturn: TaxReturn = {
+          ...target,
+          status: 'DILAPORKAN',
+          taxPosition,
+          amountDue,
+          bpeNumber: bpe,
+          submittedAt: nowIso,
+        };
         updateSnapshot((prev) => ({
           ...prev,
-          taxReturns: prev.taxReturns.map((r) =>
-            r.id === returnId
-              ? {
-                  ...r,
-                  status: 'DILAPORKAN',
-                  taxPosition,
-                  amountDue,
-                  bpeNumber: bpe,
-                  submittedAt: nowIso,
-                }
-              : r
-          ),
+          taxReturns: prev.taxReturns.map((r) => (r.id === returnId ? updatedReturn : r)),
         }));
-        void syncDocToCloud(
-          'taxReturns',
-          returnId,
-          { status: 'DILAPORKAN', taxPosition, amountDue, bpeNumber: bpe, billingCode: '', submittedAt: nowIso, payload: target.payload },
-          true
-        );
+        scheduleTaxReturnSave(cur.workspace.nik, updatedReturn, true);
         pushToast('success', `SPT berhasil dilaporkan! Nomor BPE: ${bpe}`);
         return { ok: true, message: bpe };
       }
@@ -1089,43 +902,34 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           createdAtIso: nowIso,
         };
 
-        updateSnapshot((prev) => {
-          const nextWorkspace = {
-            ...prev.workspace,
-            opProfile:
-              role === 'OP' ? { ...prev.workspace.opProfile, depositBalance: newBalance } : prev.workspace.opProfile,
-            badanProfile:
-              role === 'BADAN'
-                ? { ...prev.workspace.badanProfile, depositBalance: newBalance }
-                : prev.workspace.badanProfile,
-          };
-          return {
-            ...prev,
-            workspace: nextWorkspace,
-            taxReturns: prev.taxReturns.map((r) =>
-              r.id === returnId
-                ? {
-                    ...r,
-                    status: 'DILAPORKAN',
-                    taxPosition,
-                    amountDue,
-                    bpeNumber: bpe,
-                    submittedAt: nowIso,
-                  }
-                : r
-            ),
-            ledger: [ledgerEntry, ...prev.ledger],
-          };
-        });
+        const updatedReturn: TaxReturn = {
+          ...target,
+          status: 'DILAPORKAN',
+          taxPosition,
+          amountDue,
+          bpeNumber: bpe,
+          submittedAt: nowIso,
+        };
 
-        void syncDocToCloud(
-          'taxReturns',
-          returnId,
-          { status: 'DILAPORKAN', taxPosition, amountDue, bpeNumber: bpe, billingCode: '', submittedAt: nowIso, payload: target.payload },
-          true
-        );
-        const { id: ledId, createdAtIso: _lc, ...ledCloud } = ledgerEntry;
-        void syncDocToCloud('ledger', ledId, ledCloud, false);
+        const nextOp =
+          role === 'OP' ? { ...cur.workspace.opProfile, depositBalance: newBalance } : cur.workspace.opProfile;
+        const nextBadan =
+          role === 'BADAN' ? { ...cur.workspace.badanProfile, depositBalance: newBalance } : cur.workspace.badanProfile;
+
+        updateSnapshot((prev) => ({
+          ...prev,
+          workspace: {
+            ...prev.workspace,
+            opProfile: nextOp,
+            badanProfile: nextBadan,
+          },
+          taxReturns: prev.taxReturns.map((r) => (r.id === returnId ? updatedReturn : r)),
+          ledger: [ledgerEntry, ...prev.ledger],
+        }));
+
+        scheduleTaxReturnSave(cur.workspace.nik, updatedReturn, true);
+        void mysqlApi.updateWorkspace(cur.workspace.nik, { opProfile: nextOp, badanProfile: nextBadan });
+        void mysqlApi.addLedgerEntry(cur.workspace.nik, ledgerEntry);
         pushToast('success', `Pembayaran Deposit & Pelaporan berhasil! BPE: ${bpe}`);
         return { ok: true, message: bpe };
       }
@@ -1157,46 +961,40 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: nowIso,
       };
 
+      const updatedReturn: TaxReturn = {
+        ...target,
+        status: 'MENUNGGU_PEMBAYARAN',
+        taxPosition,
+        amountDue,
+        billingCode: billingNum,
+      };
+
       updateSnapshot((prev) => ({
         ...prev,
-        taxReturns: prev.taxReturns.map((r) =>
-          r.id === returnId
-            ? {
-                ...r,
-                status: 'MENUNGGU_PEMBAYARAN',
-                taxPosition,
-                amountDue,
-                billingCode: billingNum,
-              }
-            : r
-        ),
+        taxReturns: prev.taxReturns.map((r) => (r.id === returnId ? updatedReturn : r)),
         billing: [newBill, ...prev.billing],
       }));
 
-      void syncDocToCloud(
-        'taxReturns',
-        returnId,
-        { status: 'MENUNGGU_PEMBAYARAN', taxPosition, amountDue, bpeNumber: '', billingCode: billingNum, submittedAt: '', payload: target.payload },
-        true
-      );
-      const { id: billId, createdAtIso: _bc, ...billCloud } = newBill;
-      void syncDocToCloud('billing', billId, billCloud, false);
+      scheduleTaxReturnSave(cur.workspace.nik, updatedReturn, true);
+      void mysqlApi.saveBilling(cur.workspace.nik, newBill);
       pushToast('info', `Kode Billing ${billingNum} diterbitkan. Lunasi di menu Pembayaran agar SPT otomatis dilaporkan.`);
       return { ok: true, message: billingNum };
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, scheduleTaxReturnSave, updateSnapshot]
   );
 
   const deleteTaxReturn = useCallback(
     (returnId: string) => {
+      const cur = snapshotRef.current;
+      if (!cur) return;
       updateSnapshot((prev) => ({
         ...prev,
         taxReturns: prev.taxReturns.filter((r) => r.id !== returnId),
       }));
-      void deleteDocFromCloud('taxReturns', returnId);
+      void mysqlApi.deleteTaxReturn(cur.workspace.nik, returnId);
       pushToast('info', 'Konsep SPT dihapus.');
     },
-    [deleteDocFromCloud, pushToast, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   // --- Billing & Deposit Actions ---
@@ -1227,12 +1025,11 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: new Date().toISOString(),
       };
       updateSnapshot((prev) => ({ ...prev, billing: [bill, ...prev.billing] }));
-      const { id, createdAtIso: _c, ...cloudData } = bill;
-      void syncDocToCloud('billing', id, cloudData, false);
+      void mysqlApi.saveBilling(cur.workspace.nik, bill);
       pushToast('success', `Kode Billing ${bill.billingNumber} berhasil dibuat.`);
       return bill;
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const payBillingCode = useCallback(
@@ -1250,6 +1047,7 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const currentDeposit =
         role === 'OP' ? cur.workspace.opProfile.depositBalance : cur.workspace.badanProfile.depositBalance;
 
+      const paidBill: BillingCode = { ...target, status: 'LUNAS', ntpn, paidAt: nowIso };
       const ledgerEntry: LedgerEntry = {
         id: generateId('led'),
         ownerId: cur.workspace.ownerId,
@@ -1265,43 +1063,27 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: nowIso,
       };
 
+      const linkedReturn = target.relatedReturnId
+        ? cur.taxReturns.find((r) => r.id === target.relatedReturnId)
+        : undefined;
+      const updatedLinkedReturn: TaxReturn | undefined = linkedReturn
+        ? { ...linkedReturn, status: 'DILAPORKAN', bpeNumber: bpe, submittedAt: nowIso }
+        : undefined;
+
       updateSnapshot((prev) => ({
         ...prev,
-        billing: prev.billing.map((b) =>
-          b.id === billingId ? { ...b, status: 'LUNAS', ntpn, paidAt: nowIso } : b
-        ),
-        taxReturns: target.relatedReturnId
-          ? prev.taxReturns.map((r) =>
-              r.id === target.relatedReturnId
-                ? { ...r, status: 'DILAPORKAN', bpeNumber: bpe, submittedAt: nowIso }
-                : r
-            )
+        billing: prev.billing.map((b) => (b.id === billingId ? paidBill : b)),
+        taxReturns: updatedLinkedReturn
+          ? prev.taxReturns.map((r) => (r.id === updatedLinkedReturn.id ? updatedLinkedReturn : r))
           : prev.taxReturns,
         ledger: [ledgerEntry, ...prev.ledger],
       }));
 
-      void syncDocToCloud('billing', billingId, { status: 'LUNAS', ntpn, paidAt: nowIso }, true);
-      if (target.relatedReturnId) {
-        const linked = cur.taxReturns.find((r) => r.id === target.relatedReturnId);
-        if (linked) {
-          void syncDocToCloud(
-            'taxReturns',
-            linked.id,
-            {
-              status: 'DILAPORKAN',
-              taxPosition: linked.taxPosition,
-              amountDue: linked.amountDue,
-              bpeNumber: bpe,
-              billingCode: linked.billingCode,
-              submittedAt: nowIso,
-              payload: linked.payload,
-            },
-            true
-          );
-        }
+      void mysqlApi.saveBilling(cur.workspace.nik, paidBill);
+      if (updatedLinkedReturn) {
+        scheduleTaxReturnSave(cur.workspace.nik, updatedLinkedReturn, true);
       }
-      const { id: ledId, createdAtIso: _lc, ...ledCloud } = ledgerEntry;
-      void syncDocToCloud('ledger', ledId, ledCloud, false);
+      void mysqlApi.addLedgerEntry(cur.workspace.nik, ledgerEntry);
 
       pushToast(
         'success',
@@ -1310,7 +1092,7 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           : `Pembayaran Billing Lunas! NTPN Simulasi: ${ntpn}`
       );
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, scheduleTaxReturnSave, updateSnapshot]
   );
 
   const topUpDeposit = useCallback(
@@ -1339,21 +1121,26 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         createdAtIso: nowIso,
       };
 
+      const nextOp =
+        role === 'OP' ? { ...cur.workspace.opProfile, depositBalance: nextBal } : cur.workspace.opProfile;
+      const nextBadan =
+        role === 'BADAN' ? { ...cur.workspace.badanProfile, depositBalance: nextBal } : cur.workspace.badanProfile;
+
       updateSnapshot((prev) => ({
         ...prev,
         workspace: {
           ...prev.workspace,
-          opProfile: role === 'OP' ? { ...prev.workspace.opProfile, depositBalance: nextBal } : prev.workspace.opProfile,
-          badanProfile:
-            role === 'BADAN' ? { ...prev.workspace.badanProfile, depositBalance: nextBal } : prev.workspace.badanProfile,
+          opProfile: nextOp,
+          badanProfile: nextBadan,
         },
         ledger: [ledgerEntry, ...prev.ledger],
       }));
-      const { id: ledId, createdAtIso: _lc, ...ledCloud } = ledgerEntry;
-      void syncDocToCloud('ledger', ledId, ledCloud, false);
+
+      void mysqlApi.updateWorkspace(cur.workspace.nik, { opProfile: nextOp, badanProfile: nextBadan });
+      void mysqlApi.addLedgerEntry(cur.workspace.nik, ledgerEntry);
       pushToast('success', `Deposit Pajak bertambah. NTPN: ${ntpn}`);
     },
-    [pushToast, syncDocToCloud, updateSnapshot]
+    [pushToast, updateSnapshot]
   );
 
   const requestTte = useCallback((req: TteRequest) => setTteRequest(req), []);
@@ -1374,8 +1161,6 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const value = useMemo<SimulatorContextValue>(
     () => ({
-      firebaseUser,
-      authLoading,
       isLoggedIn: Boolean(snapshot),
       snapshot,
       activeNav,
@@ -1392,8 +1177,6 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       closePreviewDoc,
       loginWithNik,
       logoutSimulator,
-      connectGoogleCloud,
-      disconnectGoogleCloud,
       switchRole,
       toggleGuidedMode,
       setActiveCaseId,
@@ -1421,8 +1204,6 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       topUpDeposit,
     }),
     [
-      firebaseUser,
-      authLoading,
       snapshot,
       activeNav,
       toasts,
@@ -1437,8 +1218,6 @@ export const SimulatorProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       closePreviewDoc,
       loginWithNik,
       logoutSimulator,
-      connectGoogleCloud,
-      disconnectGoogleCloud,
       switchRole,
       toggleGuidedMode,
       setActiveCaseId,

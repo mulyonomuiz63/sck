@@ -282,7 +282,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
 
   const efaktur: EFakturInvoice[] = [
     {
-      id: 'inv_in_seed_1',
+      id: `inv_in1_${cleanNik}`,
       ownerId,
       workspaceId,
       category: 'INPUT',
@@ -322,7 +322,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
       createdAtIso: nowIso,
     },
     {
-      id: 'inv_in_seed_2',
+      id: `inv_in2_${cleanNik}`,
       ownerId,
       workspaceId,
       category: 'INPUT',
@@ -362,7 +362,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
       createdAtIso: nowIso,
     },
     {
-      id: 'inv_out_seed_1',
+      id: `inv_out1_${cleanNik}`,
       ownerId,
       workspaceId,
       category: 'OUTPUT',
@@ -406,7 +406,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
   const ebupot: EBupotSlip[] = [
     // Bukti Potong BPA1 Tuan A (muncul di Dokumen Saya OP & dipakai untuk Posting SPT Tahunan OP)
     {
-      id: 'slip_bpa1_tuan_a',
+      id: `slip_bpa1_${cleanNik}`,
       ownerId,
       workspaceId,
       slipType: 'BPA1',
@@ -430,7 +430,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
     },
     // Sample e-Bupot MP (Pegawai Tetap TER) milik PT Simulasi — siap diterbitkan atau ditambah
     {
-      id: 'slip_mp_seed_1',
+      id: `slip_mp1_${cleanNik}`,
       ownerId,
       workspaceId,
       slipType: 'MP',
@@ -454,7 +454,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
     },
     // Sample e-Bupot BPPU PPh 23 milik PT Simulasi
     {
-      id: 'slip_bppu_seed_1',
+      id: `slip_bppu1_${cleanNik}`,
       ownerId,
       workspaceId,
       slipType: 'BPPU',
@@ -482,7 +482,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
 
   const ledger: LedgerEntry[] = [
     {
-      id: 'led_op_init',
+      id: `led_op_${cleanNik}`,
       ownerId,
       workspaceId,
       taxpayerRole: 'OP',
@@ -496,7 +496,7 @@ export function createSeedSnapshot(nik: string, ownerId = 'local_user', customNa
       createdAtIso: nowIso,
     },
     {
-      id: 'led_badan_init',
+      id: `led_bd_${cleanNik}`,
       ownerId,
       workspaceId,
       taxpayerRole: 'BADAN',

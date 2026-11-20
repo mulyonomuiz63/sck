@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { ArrowRight, BookOpenCheck, Cloud, ShieldCheck } from 'lucide-react';
+import { ArrowRight, BookOpenCheck, ShieldCheck } from 'lucide-react';
 import { useSimulator } from '../context/SimulatorContext';
 import { DEMO_NIK_TUAN_A } from '../lib/seedData';
 
 export const LoginGate: React.FC = () => {
-  const { loginWithNik, firebaseUser, connectGoogleCloud } = useSimulator();
+  const { loginWithNik } = useSimulator();
   const [nik, setNik] = useState(DEMO_NIK_TUAN_A);
   const [nama, setNama] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -122,24 +122,9 @@ export const LoginGate: React.FC = () => {
               </form>
             </div>
 
-            <div className="mt-8 pt-5 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="text-xs text-slate-600">
-                {firebaseUser ? (
-                  <span>Sinkronisasi Cloud aktif: {firebaseUser.email}</span>
-                ) : (
-                  <span>Ingin simpan progres lintas perangkat?</span>
-                )}
-              </div>
-              {!firebaseUser && (
-                <button
-                  type="button"
-                  onClick={() => void connectGoogleCloud()}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-[#1A2B5F] border border-slate-300 rounded-md hover:bg-slate-50 transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  <Cloud className="w-3.5 h-3.5" />
-                  <span>Hubungkan Google Cloud</span>
-                </button>
-              )}
+            <div className="mt-8 pt-5 border-t border-slate-200 text-xs text-slate-600 leading-relaxed">
+              Seluruh progres latihan e-Faktur, e-Bupot, SPT, dan Pembayaran tersimpan otomatis
+              berdasarkan 16 digit NIK Anda. Gunakan NIK yang sama kapan saja untuk melanjutkan praktik.
             </div>
           </section>
 

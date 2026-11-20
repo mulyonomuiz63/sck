@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
-import { Cloud, FileDown, KeyRound, RotateCcw, Save } from 'lucide-react';
+import { FileDown, KeyRound, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { useSimulator } from '../../context/SimulatorContext';
 import { formatNpwp16, formatRupiah, MASA_NAMES, PTKP_VALUES } from '../../lib/taxCalculations';
 
 export const PortalSayaView: React.FC = () => {
   const {
     snapshot,
-    firebaseUser,
-    connectGoogleCloud,
-    disconnectGoogleCloud,
     updateProfiles,
     openPreviewDoc,
     resetSimulationData,
@@ -52,7 +49,7 @@ export const PortalSayaView: React.FC = () => {
           {[
             { id: 'dokumen', label: 'Dokumen Saya' },
             { id: 'profil', label: 'Profil & Passphrase' },
-            { id: 'pengaturan', label: 'Cloud & Reset' },
+            { id: 'pengaturan', label: 'Pengaturan & Reset' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -419,35 +416,25 @@ export const PortalSayaView: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-3">
             <h2 className="text-sm font-bold text-[#1A2B5F] flex items-center gap-2">
-              <Cloud className="w-4 h-4" />
-              <span>Sinkronisasi Database Cloud</span>
+              <ShieldCheck className="w-4 h-4" />
+              <span>Sesi Simulasi Tersimpan Otomatis</span>
             </h2>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Progres simulasi NIK Anda tersimpan otomatis di browser. Hubungkan akun Google agar
-              seluruh transaksi e-Faktur, e-Bupot, dan SPT tersinkronisasi lintas perangkat.
+              Seluruh proses praktik pada NIK{' '}
+              <span className="font-num font-semibold text-slate-900">{workspace.nik}</span>—termasuk
+              Faktur Pajak, Bukti Potong e-Bupot, Konsep &amp; Pelaporan SPT, Kode Billing, serta Buku
+              Besar Deposit—disimpan otomatis ke server untuk sesi belajar berkelanjutan.
             </p>
-            {firebaseUser ? (
-              <div className="pt-2 space-y-3">
-                <div className="text-xs text-emerald-700 font-semibold">
-                  Terhubung sebagai {firebaseUser.email}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void disconnectGoogleCloud()}
-                  className="px-4 py-2 text-xs font-semibold border border-slate-300 rounded-md hover:bg-slate-50 cursor-pointer"
-                >
-                  Putuskan Sinkronisasi Cloud
-                </button>
+            <div className="pt-2 text-xs text-slate-700 space-y-1">
+              <div>
+                <span className="text-slate-500">Akun OP:</span>{' '}
+                <span className="font-semibold">{workspace.opProfile.nama}</span>
               </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => void connectGoogleCloud()}
-                className="px-4 py-2 bg-[#1A2B5F] text-white text-xs font-bold rounded-md hover:bg-[#111D42] cursor-pointer"
-              >
-                Hubungkan Akun Google
-              </button>
-            )}
+              <div>
+                <span className="text-slate-500">Impersonate Badan:</span>{' '}
+                <span className="font-semibold">{workspace.badanProfile.nama}</span>
+              </div>
+            </div>
           </section>
 
           <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-3">

@@ -1,0 +1,13 @@
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Blokir akses HTTP langsung ke file konfigurasi database
+  <FilesMatch "^config(\.example)?\.php$">
+    Require all denied
+  </FilesMatch>
+
+  # Arahkan seluruh request /api/* ke index.php
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.php [QSA,L]
+</IfModule>
